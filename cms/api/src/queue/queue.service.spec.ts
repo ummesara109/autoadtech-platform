@@ -74,19 +74,22 @@ describe('QueueService (memory / no fake history)', () => {
     expect(enq.playing?.title).toBe('One');
     expect(enq.queued).toHaveLength(2);
 
-    const after1 = await svc.completePlaying(SCREEN_A, enq.playing!.id);
-    expect(after1.playing?.title).toBe('Two');
-    expect(after1.queued.map((q) => q.title)).toEqual(['Three']);
+    await svc.completePlaying(SCREEN_A, enq.playing!.id);
+    const after1 = await svc.snapshot(SCREEN_A);
+    expect(after1.currentlyPlaying?.title).toBe('Two');
+    expect(after1.upcomingQueue.map((q) => q.title)).toEqual(['Three']);
 
     const hist = (await svc.snapshot(SCREEN_A)).playbackHistory;
     expect(hist).toHaveLength(1);
     expect(hist[0].title).toBe('One');
     expect(hist[0].outcome).toBe('COMPLETED');
 
-    const after2 = await svc.completePlaying(SCREEN_A, after1.playing!.id);
-    expect(after2.playing?.title).toBe('Three');
-    const after3 = await svc.completePlaying(SCREEN_A, after2.playing!.id);
-    expect(after3.playing).toBeNull();
+    await svc.completePlaying(SCREEN_A, after1.currentlyPlaying!.id);
+    const after2 = await svc.snapshot(SCREEN_A);
+    expect(after2.currentlyPlaying?.title).toBe('Three');
+    await svc.completePlaying(SCREEN_A, after2.currentlyPlaying!.id);
+    const after3 = await svc.snapshot(SCREEN_A);
+    expect(after3.currentlyPlaying).toBeNull();
     expect((await svc.snapshot(SCREEN_A)).playbackHistory).toHaveLength(3);
   });
 
