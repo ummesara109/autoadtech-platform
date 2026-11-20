@@ -10,6 +10,9 @@ starts NestJS and Vite together; Vite proxies `/api` to NestJS.
 cms/
 ├── src/                         # NestJS/Fastify API source
 ├── test/                        # NestJS API tests
+├── api/
+│   └── [...path].ts              # Single Vercel function for all NestJS API routes
+├── api-legacy/                   # Retained standalone API project, outside Vercel's function directory
 ├── frontend/
 │   ├── src/                     # React/Vite PWA source
 │   ├── public/                  # PWA icons, offline page, local demo creatives
@@ -53,9 +56,20 @@ The unified development command starts both development servers:
 | Vite PWA | http://localhost:4173 |
 | NestJS API health | http://localhost:4100/api/health |
 
-Vite forwards `/api/*` to NestJS on port 4100. In production, NestJS serves
-`frontend/dist` and handles the SPA fallback for frontend routes. Requests under
-`/api` are excluded from that fallback, so unknown API paths remain API 404s.
+Vite forwards `/api/*` to NestJS on port 4100. In Docker/Node production, NestJS
+serves `frontend/dist` and handles the SPA fallback for frontend routes. Requests
+under `/api` are excluded from that fallback.
+
+On Vercel, `vercel.json` builds the same frontend and NestJS sources, serves
+`frontend/dist` as static output, and routes API requests to one catch-all serverless
+function. That function boots the same `AppModule`, controllers, guards, validation,
+and CORS configuration as the regular NestJS server. The old standalone project is
+kept under `api-legacy/` so Vercel does not treat its source files as separate
+functions.
+
+Set the CMS server environment variables in the Vercel project settings. Keep
+`VITE_API_URL` empty for the browser PWA so it uses same-origin `/api` requests.
+Set `CORS_ORIGIN` to the allowed browser origins when the API is called cross-origin.
 
 For local seeded login, set `CMS_DEV_AUTH=true`; the local OTP is `123456`. Do not
 use development authentication or demo creatives in production. To use Supabase,

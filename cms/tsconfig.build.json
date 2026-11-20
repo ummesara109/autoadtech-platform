@@ -6,6 +6,7 @@
     "dist",
     "frontend",
     "api",
+    "api-legacy",
     "web",
     "plugins",
     "android-companion",
