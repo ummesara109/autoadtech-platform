@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#050e0a" />
+    <meta name="apple-mobile-web-app-title" content="Auto Display" />
+    <title>Offline — Auto AdTech Display</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: 'Segoe UI', 'Helvetica Neue', ui-sans-serif, system-ui, sans-serif;
+      }
+      body {
+        margin: 0;
+        min-height: 100dvh;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        color: #e8f5ef;
+        background:
+          radial-gradient(900px 500px at 10% -10%, rgba(61, 214, 140, 0.18), transparent 55%),
+          #0b1f17;
+      }
+      main {
+        max-width: 420px;
+        width: 100%;
+        border: 1px solid rgba(232, 245, 239, 0.12);
+        border-radius: 16px;
+        padding: 28px 24px;
+        background: rgba(22, 58, 48, 0.88);
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: 1.4rem;
+      }
+      p {
+        margin: 0;
+        color: #9bb8ac;
+        line-height: 1.5;
+      }
+      button {
+        margin-top: 20px;
+        width: 100%;
+        border: 0;
+        border-radius: 12px;
+        padding: 14px 16px;
+        font: inherit;
+        font-weight: 600;
+        background: #3dd68c;
+        color: #062016;
+        cursor: pointer;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 20px;
+      }
+      .mark {
+        width: 40px;
+        height: 40px;
+        border-radius: 10px;
+        display: grid;
+        place-items: center;
+        font-weight: 700;
+        color: #0b1f17;
+        background: linear-gradient(145deg, #3dd68c, #1f8f5a);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="brand">
+        <div class="mark" aria-hidden="true">AC</div>
+        <div>
+          <strong>Auto AdTech Display</strong>
+          <div style="color: #9bb8ac; font-size: 0.85rem">Offline</div>
+        </div>
+      </div>
+      <h1>You’re offline</h1>
+      <p>
+        The display shell is available offline. Sign-in, OTP, and live ads need a
+        network connection and are never cached for security.
+      </p>
+      <button type="button" onclick="location.reload()">Try again</button>
+    </main>
+  </body>
+</html>

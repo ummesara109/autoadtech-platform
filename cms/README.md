@@ -1,156 +1,163 @@
-# Auto AdTech CMS (Milestone 1) — local only
+# Unified NiyoAds CMS
 
-Vehicle **Auto Display** PWA (**Auto AdTech Display** / **Auto Display**): **Auto Number → OTP → full-screen signage** (one screen per auto).
+The `cms/` directory is the single application root. NestJS serves the built Vite
+PWA and all API endpoints from the same origin. During development, one root command
+starts NestJS and Vite together; Vite proxies `/api` to NestJS.
 
-This tree is a **standalone local copy** prepared for a future `niyoads-cms` repo.
-**Do not push or deploy from this copy until you create that remote and approve publish.**
+## Structure
 
-| Piece | Path | Stack |
-| --- | --- | --- |
-| API | `api/` | NestJS + **Fastify** (no Express), Redis cache, Supabase Auth OTP |
-| Web | `web/` | React + TypeScript + Vite + Tailwind + fullscreen Auto Display PWA |
-| Schema | `supabase/migrations/` | PostgreSQL + RLS |
-| Compose | `docker-compose.yml` | API + Redis + PWA |
-
-MQTT / ad delivery / live GPS stay **outside** this NestJS app — see [MQTT_SEAM.md](./MQTT_SEAM.md).
-
-## Prerequisites
-
-- Node.js **22+** (18+ may work; CI targets 22)
-- npm
-- Optional: Docker Desktop (for compose) / Redis (API falls back to in-memory if Redis is down)
-
-## Quick start (Windows / macOS / Linux)
-
-From this folder (`niyoads-cms`):
-
-```bash
-npm install
-npm run install:cms
-npm run dev:cms
+```text
+cms/
+├── src/                         # NestJS/Fastify API source
+├── test/                        # NestJS API tests
+├── frontend/
+│   ├── src/                     # React/Vite PWA source
+│   ├── public/                  # PWA icons, offline page, local demo creatives
+│   ├── android/                 # Capacitor Android application
+│   ├── scripts/
+│   ├── index.html
+│   ├── vite.config.mts
+│   ├── tsconfig*.json
+│   └── capacitor.config.json
+├── plugins/niyoads-silent-gps/  # Capacitor workspace dependency
+├── supabase/migrations/         # Existing CMS schema migrations
+├── android-companion/           # Native GPS documentation
+├── tools/
+├── package.json                 # Unified CMS commands and dependencies
+├── .env                         # Local server/Vite configuration; ignored by Git
+├── Dockerfile
+└── docker-compose.yml
 ```
 
-There are no checked-in `.env.example` files. For local seeded sign-in, no API or web
-`.env` file is required. To use Supabase, create `api/.env` with the server-side
-credentials and set `CMS_DEV_AUTH=false`; never put the service-role key in the web
-environment.
+`plugins/niyoads-silent-gps` remains a local workspace package used by Capacitor; it
+is not a separately run CMS application. API and frontend source do not have their
+own package manifests or install commands.
+
+## Requirements and local development
+
+- Node.js 22+
+- npm
+
+From the CMS root:
+
+```powershell
+cd C:\Users\DELL\Downloads\niyoads-platform-modules\cms
+npm install
+npm run dev
+```
+
+The unified development command starts both development servers:
 
 | Service | URL |
 | --- | --- |
-| Auto Display PWA | http://localhost:4173 |
-| API health | http://localhost:4100/api/health |
+| Vite PWA | http://localhost:4173 |
+| NestJS API health | http://localhost:4100/api/health |
 
-Vite proxies `/api` → `:4100`; the API applies the same global `api` prefix used by
-the frontend. With `CMS_DEV_AUTH=true`, the local OTP is `123456` and the seeded Auto
-Numbers work without Supabase. Do not use this mode for production.
+Vite forwards `/api/*` to NestJS on port 4100. In production, NestJS serves
+`frontend/dist` and handles the SPA fallback for frontend routes. Requests under
+`/api` are excluded from that fallback, so unknown API paths remain API 404s.
 
-### Gate test flow
+For local seeded login, set `CMS_DEV_AUTH=true`; the local OTP is `123456`. Do not
+use development authentication or demo creatives in production. To use Supabase,
+put the API credentials in the ignored CMS-root `.env` file and set
+`CMS_DEV_AUTH=false`. The Supabase service-role/secret key must remain server-side.
 
-1. Open http://localhost:4173
-2. Auto Number `KA01AB1234` → masked mobile → OTP `123456` → **full-screen Display**. Local dev-auth may seed sample demo ads; with Supabase-backed auth, the display stays black until a real queue item with a `mediaUrl` is assigned.
-3. Display is **touch-locked**: taps must not show ad controls; mouse cursor stays **visible**; small **Log out** stays top-right (**Online** badge removed). Full operator chrome: top-left long-press or `/display?ops=1`
-4. Try `KA02CD5678` → OTP `123456` → same display flow (one screen per auto)
-5. Creatives appear only when the queue reports PLAYING **with** an `http(s)` `mediaUrl` from ad delivery / MQTT — never invented in the browser
-6. Android tablets: see [ANDROID_KIOSK.md](./ANDROID_KIOSK.md) (CSS/JS cannot block system nav; MDM / Fully Kiosk required)
+## Production build and run
 
-### Install as a PWA (Windows Chrome + Android)
+From the CMS root:
 
-Manifest: **Auto AdTech Display** / **Auto Display**, `display: fullscreen`,
-`orientation: landscape`, `start_url: /` (login → OTP → `/display`), icons under
-`web/public/icons/`, theme/background `#050e0a`. `vite-plugin-pwa` registers the
-service worker; dev mode enables a development worker, but use a production build
-for final install/offline validation. `/api` responses and video creatives use
-NetworkOnly; assigned creative images use CacheFirst. The offline shell and icons
-are precached.
+```powershell
+npm run build
+npm start
+```
 
-**Use a production build for final installability checks** (the dev server uses a
-development service worker and hot reload):
+The build compiles the Capacitor plugin, builds the PWA into `frontend/dist`, and
+builds the NestJS API into `dist`. NestJS then serves both the PWA and `/api/*` on
+port 4100. Set `PORT` to change the listening port.
 
-```bash
-cd web
+## PWA and Android
+
+The existing manifest, icons, fullscreen behavior, service worker, offline shell,
+and install hint remain under `frontend/`. API responses and video creatives are
+NetworkOnly; assigned creative images use the existing image cache. Login and OTP
+require network access. Browser GPS requires HTTPS (or localhost) and location
+permission.
+
+For a production PWA install check:
+
+```powershell
 npm run build
 npm run preview
 ```
 
-Then open http://localhost:4173
+For Android, set `VITE_NATIVE_API_URL` in the root `.env` to the reachable NestJS
+API origin, then run:
 
-| Platform | Steps |
-| --- | --- |
-| **Windows / Android Chrome** | Use the login-page **Install app** hint when Chrome exposes the install prompt, or Chrome’s ⋮ → **Install app** / **Create shortcut** menu. |
-
-Login/OTP and live GPS always need network. Offline shell + `offline.html` are
-precached; API responses and video creatives are never cached. Browser GPS requires
-a secure context (HTTPS, or localhost) and explicit location permission.
-
-### Separate terminals (if you prefer)
-
-Install once from the CMS root:
-
-```bash
-npm install
-npm run install:cms
+```powershell
+npm run build:android
+npm run android:open
 ```
 
-Then start each service from the CMS root in its own terminal:
+Background tracking must be verified on a real Android device with location and
+notification permissions. See [ANDROID_KIOSK.md](./ANDROID_KIOSK.md) and
+[android-companion/README.md](./android-companion/README.md).
 
-```bash
-# Terminal 1 — API
-npm run start:dev --prefix api
-```
+## Docker
 
-```bash
-# Terminal 2 — Web
-npm run dev --prefix web
-```
+From the CMS root:
 
-## Docker (optional)
-
-```bash
+```powershell
 docker compose up --build
 ```
 
-- PWA: http://localhost:8088  
-- API: http://localhost:4100  
+The same NestJS container serves both UI and API:
 
-## Supabase (later / production OTP)
+- PWA: http://localhost:8088
+- API health: http://localhost:4100/api/health
 
-Not required for local gate testing with `CMS_DEV_AUTH=true`.
+Redis is included for OTP challenges and session caching. Set production Supabase,
+Admin GPS, and internal-key environment variables before using a deployed
+environment.
 
-1. Run migrations in the Supabase SQL editor:
-   - `supabase/migrations/202603140001_cms_milestone1.sql`
-   - `supabase/migrations/202603140002_cms_seed_dev.sql` (dev only)
-2. Enable **Phone** provider in Supabase Auth.
-3. Set on the API:
+## Environment variables
 
-```env
-CMS_DEV_AUTH=false
-SUPABASE_URL=https://YOUR_PROJECT.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=...
-REDIS_URL=redis://...
+The API reads server configuration from the process environment or root `.env`.
+Vite also reads root `.env`, but only `VITE_*` variables are included in browser
+builds.
+
+| Variable | Purpose |
+| --- | --- |
+| `PORT` | NestJS listening port (default `4100`) |
+| `CORS_ORIGIN` | Comma-separated allowed browser origins |
+| `SUPABASE_URL` | Existing Supabase project URL |
+| `SUPABASE_SERVICE_ROLE_KEY` / `SUPABASE_SECRET_KEY` | Server-side Supabase access |
+| `CMS_DEV_AUTH` | Local development OTP/seed mode |
+| `REDIS_URL` | OTP/session/dashboard cache |
+| `CMS_INTERNAL_KEY` | Protects internal ad-queue endpoints |
+| `ADMIN_GPS_URL` / `ADMIN_API_URL` | Admin API origin for CMS GPS forwarding |
+| `CMS_GPS_INGEST_KEY` | Server-to-server Admin ingest key |
+| `ADMIN_GPS_RETRY_MS` / `ADMIN_GPS_FORWARD_INTERVAL_MS` | GPS retry cadence |
+| `CMS_GPS_ONLINE_MS` | Admin live-location online threshold |
+| `VITE_API_URL` | Optional API origin; leave empty for same-origin/proxy routing |
+| `VITE_NATIVE_API_URL` | NestJS origin used by the Android GPS foreground service |
+| `VITE_GPS_POST_INTERVAL_MS` | Optional browser GPS reporting interval |
+
+Never commit `.env` or expose Supabase/Admin secrets through a `VITE_*` variable.
+
+## Supabase
+
+The application continues using the existing Supabase schema and migrations. Apply
+the migrations in `supabase/migrations/` to the existing project; do not create
+duplicate tables. Production OTP requires Supabase Phone Auth to be enabled and
+`CMS_DEV_AUTH=false`.
+
+## Validation
+
+```powershell
+npm run build
+npm test -- --runInBand
+npm run lint
 ```
 
-## API routing and environment
-
-| Variable | Where | Purpose |
-| --- | --- | --- |
-| `SUPABASE_URL` | API | Project URL |
-| `SUPABASE_SERVICE_ROLE_KEY` | API | Server-side Auth + DB (never in browser) |
-| `CMS_DEV_AUTH` | API | `true` = OTP `123456` + in-memory seed |
-| `REDIS_URL` | API | Cache OTP challenges / sessions / dashboard |
-| `CORS_ORIGIN` | API | Allowed web origins |
-| `ADMIN_GPS_URL` / `ADMIN_API_URL` | API | Admin API origin for server-to-server GPS forwarding |
-| `CMS_GPS_INGEST_KEY` | API | Admin ingest secret; never exposed to the PWA |
-| `VITE_API_URL` | Web | API origin; leave empty for same-origin `/api` or the Vite proxy |
-| `VITE_NATIVE_API_URL` | Web/native build | HTTPS Nest API origin for the Capacitor Android GPS service |
-
-Development API routes are forwarded by Vite from `/api/*` to
-`http://127.0.0.1:4100/api/*`. In Docker, Nginx serves the PWA and proxies the same
-`/api/*` path to the Nest service. For a separate web/API deployment, set
-`VITE_API_URL` to the Nest API origin and allow the web origin in `CORS_ORIGIN`.
-Capacitor builds also need the API origin allowed by CORS for WebView login and
-dashboard requests.
-
-## Migration note
-
-Source was extracted from `balappa-gouda/niyoads-admin-patch` branch `cursor/cms-milestone-1-gate-707b`.
-After you create the real `niyoads-cms` remote and verify locally, **close PR #1** on `niyoads-admin-patch` (do not merge CMS into platform). See [MIGRATE_NOTE.md](./MIGRATE_NOTE.md).
+The production run uses one CMS process and one origin. Development uses Vite and
+NestJS as two processes managed by the root `npm run dev` command.

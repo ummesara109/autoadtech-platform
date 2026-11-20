@@ -1,6 +1,4 @@
-# CMS milestone 1 stack — NestJS (Fastify) API + Redis + React PWA
-# From this repo root: docker compose up --build
-
+# One NestJS CMS process serves both /api and the built PWA.
 services:
   redis:
     image: redis:7-alpine
@@ -8,32 +6,26 @@ services:
       - '6379:6379'
     restart: unless-stopped
 
-  cms-api:
-    build: ./api
+  cms:
+    build: .
     ports:
+      - '8088:4100'
       - '4100:4100'
     environment:
       PORT: 4100
-      CORS_ORIGIN: http://localhost:4173,http://localhost:8088,http://127.0.0.1:4173,http://127.0.0.1:8088
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:4173,http://127.0.0.1:4173}
       REDIS_URL: redis://redis:6379
       CMS_DEV_AUTH: ${CMS_DEV_AUTH:-true}
+      CMS_INTERNAL_KEY: ${CMS_INTERNAL_KEY:-}
       SUPABASE_URL: ${SUPABASE_URL:-}
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
+      SUPABASE_SECRET_KEY: ${SUPABASE_SECRET_KEY:-}
       ADMIN_GPS_URL: ${ADMIN_GPS_URL:-}
       ADMIN_API_URL: ${ADMIN_API_URL:-}
       CMS_GPS_INGEST_KEY: ${CMS_GPS_INGEST_KEY:-}
+      ADMIN_GPS_RETRY_MS: ${ADMIN_GPS_RETRY_MS:-}
+      ADMIN_GPS_FORWARD_INTERVAL_MS: ${ADMIN_GPS_FORWARD_INTERVAL_MS:-}
+      CMS_GPS_ONLINE_MS: ${CMS_GPS_ONLINE_MS:-}
     depends_on:
       - redis
-    restart: unless-stopped
-
-  cms-web:
-    build:
-      context: ./web
-      args:
-        # Same-origin /api via nginx proxy
-        VITE_API_URL: ''
-    ports:
-      - '8088:80'
-    depends_on:
-      - cms-api
     restart: unless-stopped

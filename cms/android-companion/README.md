@@ -8,9 +8,9 @@
 | --- | --- |
 | Local Capacitor plugin | `plugins/niyoads-silent-gps` |
 | Android FGS + notification | `plugins/.../LocationForegroundService.java` |
-| JS bridge | `web/src/lib/nativeGpsBridge.ts` → `window.NiyoAdsGps` |
-| Capacitor config | `web/capacitor.config.ts` (`com.niyoads.autodisplay`) |
-| Android app project | `android/` (after `npx cap add android` / `npm run build:android`) |
+| JS bridge | `frontend/src/lib/nativeGpsBridge.ts` → `window.NiyoAdsGps` |
+| Capacitor config | `frontend/capacitor.config.json` (`com.niyoads.autodisplay`) |
+| Android app project | `frontend/android/` (`npm run build:android`) |
 
 ## Lifecycle
 
@@ -32,18 +32,17 @@
 Requires **JDK 17 or 21** (Android Gradle). Java 24 on the agent host fails with `Unsupported class file major version 68`.
 
 ```bat
-cd C:\Users\DELL\Downloads\niyoads-cms-display-pwa
+cd C:\Users\DELL\Downloads\niyoads-platform-modules\cms
 
-REM 1) Install + build plugin + web deps
-npm run install:cms
+REM Install once from the unified CMS root
+npm install
 
 REM 2) Point the APK at your Nest API (LAN IP of the PC running :4100)
-echo VITE_NATIVE_API_URL=http://192.168.x.x:4100> web\.env
+echo VITE_NATIVE_API_URL=http://192.168.x.x:4100>> .env
 
-REM 3) Build web assets + sync Android (project lives in web\android)
-cd web
-npm run build:cap
-npx cap open android
+REM 3) Build web assets + sync Android (project lives in frontend\android)
+npm run build:android
+npm run android:open
 ```
 
 In Android Studio: Run on a device/emulator. After OTP `KA01AB1234` / `123456`, allow location (+ notifications). Confirm the persistent notification **“Auto Display location active”**. Minimize / lock screen and confirm Admin fleet still updates — **only then** claim background tracking works.

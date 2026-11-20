@@ -1,0 +1,12 @@
+.git
+.env
+**/.env
+**/.env.*
+!.env.example
+**/node_modules
+**/dist
+**/dev-dist
+**/build
+**/tmp-*
+frontend/android
+coverage

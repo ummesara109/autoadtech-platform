@@ -1,0 +1,11 @@
+{
+  "appId": "com.niyoads.autodisplay",
+  "appName": "Auto AdTech Display",
+  "webDir": "dist",
+  "android": {
+    "allowMixedContent": true
+  },
+  "server": {
+    "androidScheme": "https"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+  "exclude": [
+    "node_modules",
+    "test",
+    "dist",
+    "frontend",
+    "api",
+    "web",
+    "plugins",
+    "android-companion",
+    "tools",
+    "**/*spec.ts",
+    "**/*.e2e-spec.ts"
+  ]
+}
