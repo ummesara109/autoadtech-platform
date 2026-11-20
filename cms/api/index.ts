@@ -43,10 +43,28 @@ function getApplication(): Promise<NestExpressApplication> {
   return applicationPromise;
 }
 
+function restoreApiPath(request: Request, response: Response): boolean {
+  const rewrittenUrl = new URL(request.url ?? '/', 'http://localhost');
+  const apiPath = rewrittenUrl.searchParams
+    .getAll('__cms_path')
+    .find((path) => path === '/api' || path.startsWith('/api/'));
+
+  if (!apiPath) {
+    response.status(404).json({ statusCode: 404, message: 'Not Found' });
+    return false;
+  }
+
+  rewrittenUrl.searchParams.delete('__cms_path');
+  request.url = `${apiPath}${rewrittenUrl.search}`;
+  return true;
+}
+
 export default async function handler(
   request: Request,
   response: Response,
 ): Promise<void> {
+  if (!restoreApiPath(request, response)) return;
+
   const app = await getApplication();
   const listener = app
     .getHttpAdapter()

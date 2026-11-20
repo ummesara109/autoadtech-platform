@@ -60,12 +60,12 @@ Vite forwards `/api/*` to NestJS on port 4100. In Docker/Node production, NestJS
 serves `frontend/dist` and handles the SPA fallback for frontend routes. Requests
 under `/api` are excluded from that fallback.
 
-On Vercel, `vercel.json` builds the same frontend and NestJS sources, serves
-`frontend/dist` as static output, and routes API requests to one catch-all serverless
-function. That function boots the same `AppModule`, controllers, guards, validation,
-and CORS configuration as the regular NestJS server. The old standalone project is
-kept under `api-legacy/` so Vercel does not treat its source files as separate
-functions.
+For the Vercel CMS project, set **Root Directory** to `cms`. Its `vercel.json`
+builds the same frontend and NestJS sources, serves `frontend/dist` as static
+output, and rewrites all `/api/*` requests through one serverless function. That
+function boots the same `AppModule`, controllers, guards, validation, and CORS
+configuration as the regular NestJS server. The old standalone project is kept
+under `api-legacy/` so Vercel does not treat its source files as separate functions.
 
 Set the CMS server environment variables in the Vercel project settings. Keep
 `VITE_API_URL` empty for the browser PWA so it uses same-origin `/api` requests.
