@@ -10,7 +10,7 @@ function resolveApiBaseUrl(): string {
   const fromEnv = String(
     import.meta.env.VITE_NATIVE_API_URL ?? import.meta.env.VITE_API_URL ?? '',
   ).trim();
-  if (fromEnv) return fromEnv.replace(/\/$/, '');
+  if (fromEnv) return fromEnv.replace(/\/+$/, '');
 
   // Capacitor WebView origin is not the Nest API — require env for native builds.
   if (Capacitor.isNativePlatform()) {

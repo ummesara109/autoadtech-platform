@@ -1,4 +1,4 @@
-const API_BASE = import.meta.env.VITE_API_URL ?? '';
+const API_BASE = (import.meta.env.VITE_API_URL ?? '').replace(/\/+$/, '');
 
 export class ApiError extends Error {
   status: number;
@@ -130,7 +130,10 @@ export type DashboardResponse = {
     lng: number | null;
     speedKmh: number | null;
     headingDeg: number | null;
+    accuracyM?: number | null;
     recordedAt: string | null;
+    lastUpdated?: string | null;
+    trackingActive?: boolean;
     /** cms_dev_seed | cms_vehicle_location | placeholder */
     source: string;
   };

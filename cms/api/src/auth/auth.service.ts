@@ -225,7 +225,7 @@ export class AuthService {
       try {
         const session = JSON.parse(cached) as SessionPayload;
         if (session?.operator?.vehicleId) {
-          await this.location.stopForVehicle(session.operator.vehicleId);
+          await this.location.stopForSession(session);
         }
       } catch {
         /* ignore */

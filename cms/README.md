@@ -26,25 +26,28 @@ From this folder (`niyoads-cms`):
 
 ```bash
 npm install
-cp api/.env.example api/.env
-cp web/.env.example web/.env
 npm run install:cms
 npm run dev:cms
 ```
 
-Equivalent: `npm run install:all` then `npm run dev`.
+There are no checked-in `.env.example` files. For local seeded sign-in, no API or web
+`.env` file is required. To use Supabase, create `api/.env` with the server-side
+credentials and set `CMS_DEV_AUTH=false`; never put the service-role key in the web
+environment.
 
 | Service | URL |
 | --- | --- |
 | Auto Display PWA | http://localhost:4173 |
 | API health | http://localhost:4100/api/health |
 
-Vite proxies `/api` → `:4100`. With `CMS_DEV_AUTH=true` (default in `.env.example`), OTP is always `123456` and seed Auto Numbers work **without** Supabase.
+Vite proxies `/api` → `:4100`; the API applies the same global `api` prefix used by
+the frontend. With `CMS_DEV_AUTH=true`, the local OTP is `123456` and the seeded Auto
+Numbers work without Supabase. Do not use this mode for production.
 
 ### Gate test flow
 
 1. Open http://localhost:4173
-2. Auto Number `KA01AB1234` → masked mobile → OTP `123456` → **full-screen Display** (pure **black** idle until a real queue `mediaUrl` is assigned — no waiting chrome)
+2. Auto Number `KA01AB1234` → masked mobile → OTP `123456` → **full-screen Display**. Local dev-auth may seed sample demo ads; with Supabase-backed auth, the display stays black until a real queue item with a `mediaUrl` is assigned.
 3. Display is **touch-locked**: taps must not show ad controls; mouse cursor stays **visible**; small **Log out** stays top-right (**Online** badge removed). Full operator chrome: top-left long-press or `/display?ops=1`
 4. Try `KA02CD5678` → OTP `123456` → same display flow (one screen per auto)
 5. Creatives appear only when the queue reports PLAYING **with** an `http(s)` `mediaUrl` from ad delivery / MQTT — never invented in the browser
@@ -52,9 +55,16 @@ Vite proxies `/api` → `:4100`. With `CMS_DEV_AUTH=true` (default in `.env.exam
 
 ### Install as a PWA (Windows Chrome + Android)
 
-Manifest: **Auto AdTech Display** / **Auto Display**, `display: fullscreen`, `orientation: landscape`, `start_url: /` (login → OTP → `/display`), icons under `web/public/icons/`, theme/background `#050e0a`. Service worker registers from production builds via `vite-plugin-pwa` + `registerSW` (`/api` = NetworkOnly; media CacheFirst).
+Manifest: **Auto AdTech Display** / **Auto Display**, `display: fullscreen`,
+`orientation: landscape`, `start_url: /` (login → OTP → `/display`), icons under
+`web/public/icons/`, theme/background `#050e0a`. `vite-plugin-pwa` registers the
+service worker; dev mode enables a development worker, but use a production build
+for final install/offline validation. `/api` responses and video creatives use
+NetworkOnly; assigned creative images use CacheFirst. The offline shell and icons
+are precached.
 
-**Installability needs a production build** (dev server has SW disabled):
+**Use a production build for final installability checks** (the dev server uses a
+development service worker and hot reload):
 
 ```bash
 cd web
@@ -66,18 +76,31 @@ Then open http://localhost:4173
 
 | Platform | Steps |
 | --- | --- |
-| **Windows / Android Chrome** | ⋮ → **Install and create shortcut** → Install / Create shortcut (native browser menu only). No in-app install card anywhere in the UI. Manifest + service worker remain so Chrome can offer install. |
+| **Windows / Android Chrome** | Use the login-page **Install app** hint when Chrome exposes the install prompt, or Chrome’s ⋮ → **Install app** / **Create shortcut** menu. |
 
-Login/OTP always need network. Offline shell + `offline.html` are precached; API responses are never cached.
+Login/OTP and live GPS always need network. Offline shell + `offline.html` are
+precached; API responses and video creatives are never cached. Browser GPS requires
+a secure context (HTTPS, or localhost) and explicit location permission.
 
 ### Separate terminals (if you prefer)
 
+Install once from the CMS root:
+
+```bash
+npm install
+npm run install:cms
+```
+
+Then start each service from the CMS root in its own terminal:
+
 ```bash
 # Terminal 1 — API
-cd api && cp .env.example .env && npm install && npm run start:dev
+npm run start:dev --prefix api
+```
 
+```bash
 # Terminal 2 — Web
-cd web && cp .env.example .env && npm install && npm run dev
+npm run dev --prefix web
 ```
 
 ## Docker (optional)
@@ -106,7 +129,7 @@ SUPABASE_SERVICE_ROLE_KEY=...
 REDIS_URL=redis://...
 ```
 
-## Env vars
+## API routing and environment
 
 | Variable | Where | Purpose |
 | --- | --- | --- |
@@ -115,7 +138,17 @@ REDIS_URL=redis://...
 | `CMS_DEV_AUTH` | API | `true` = OTP `123456` + in-memory seed |
 | `REDIS_URL` | API | Cache OTP challenges / sessions / dashboard |
 | `CORS_ORIGIN` | API | Allowed web origins |
-| `VITE_API_URL` | Web | Empty for same-origin or Vite proxy |
+| `ADMIN_GPS_URL` / `ADMIN_API_URL` | API | Admin API origin for server-to-server GPS forwarding |
+| `CMS_GPS_INGEST_KEY` | API | Admin ingest secret; never exposed to the PWA |
+| `VITE_API_URL` | Web | API origin; leave empty for same-origin `/api` or the Vite proxy |
+| `VITE_NATIVE_API_URL` | Web/native build | HTTPS Nest API origin for the Capacitor Android GPS service |
+
+Development API routes are forwarded by Vite from `/api/*` to
+`http://127.0.0.1:4100/api/*`. In Docker, Nginx serves the PWA and proxies the same
+`/api/*` path to the Nest service. For a separate web/API deployment, set
+`VITE_API_URL` to the Nest API origin and allow the web origin in `CORS_ORIGIN`.
+Capacitor builds also need the API origin allowed by CORS for WebView login and
+dashboard requests.
 
 ## Migration note
 
