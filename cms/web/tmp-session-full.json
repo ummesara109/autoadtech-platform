@@ -1,0 +1,25 @@
+{
+    "accessToken":  "dev.aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.85656ef6-cd00-4c82-b774-82192871b586",
+    "expiresIn":  3600,
+    "operator":  {
+                     "id":  "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                     "displayName":  "Operator One",
+                     "roleCode":  "cms_operator",
+                     "vehicleId":  "11111111-1111-4111-8111-111111111111",
+                     "autoNumber":  "KA01AB1234"
+                 },
+    "screen":  {
+                   "id":  "33333333-3333-4333-8333-333333333331",
+                   "code":  "REAR",
+                   "label":  "Rear screen",
+                   "placement":  "rear"
+               },
+    "screens":  [
+                    {
+                        "id":  "33333333-3333-4333-8333-333333333331",
+                        "code":  "REAR",
+                        "label":  "Rear screen",
+                        "placement":  "rear"
+                    }
+                ]
+}

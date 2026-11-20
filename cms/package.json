@@ -1,0 +1,18 @@
+{
+  "name": "niyoads-cms",
+  "private": true,
+  "description": "NiyoAds vehicle-operator CMS PWA (local-first; not published yet)",
+  "scripts": {
+    "install:cms": "npm install --prefix api && npm install --prefix plugins/niyoads-silent-gps && npm run build --prefix plugins/niyoads-silent-gps && npm install --prefix web",
+    "dev:cms": "concurrently -n cms-api,cms-web -c cyan,white \"npm run start:dev --prefix api\" \"npm run dev --prefix web\"",
+    "install:all": "npm install && npm run install:cms",
+    "dev": "npm run dev:cms",
+    "build:cms": "npm run build --prefix api && npm run build --prefix web",
+    "build": "npm run build:cms",
+    "build:android": "npm run build --prefix plugins/niyoads-silent-gps && npm run build:cap --prefix web"
+  },
+
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

@@ -1,0 +1,202 @@
+@import 'tailwindcss';
+
+:root {
+  --cms-bg: #0b1f17;
+  --cms-bg-elevated: #123028;
+  --cms-panel: #163a30;
+  --cms-ink: #e8f5ef;
+  --cms-muted: #9bb8ac;
+  --cms-accent: #3dd68c;
+  --cms-accent-dim: #1f8f5a;
+  --cms-warn: #e8b84a;
+  --cms-danger: #e86a5a;
+  --cms-border: rgba(232, 245, 239, 0.12);
+  font-family: 'Segoe UI', 'Helvetica Neue', ui-sans-serif, system-ui, sans-serif;
+  color: var(--cms-ink);
+  background: var(--cms-bg);
+  line-height: 1.45;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background:
+    radial-gradient(1200px 600px at 10% -10%, rgba(61, 214, 140, 0.18), transparent 55%),
+    radial-gradient(900px 500px at 100% 0%, rgba(30, 90, 70, 0.45), transparent 50%),
+    var(--cms-bg);
+}
+
+button,
+input {
+  font: inherit;
+}
+
+a {
+  color: var(--cms-accent);
+}
+
+.safe-top {
+  padding-top: max(0.75rem, env(safe-area-inset-top));
+}
+
+.safe-bottom {
+  padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Full-screen Auto Display — kill page scroll chrome + passenger touch */
+.display-root {
+  overscroll-behavior: none;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Ad stage: never interactive — gestures pass through to root (hotzone) only */
+.display-stage {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  pointer-events: none;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/*
+ * Portrait phone: CSS-rotate the playback stage 90° so ads play as landscape
+ * fullscreen on the long edge. Ops chrome / PIN stay upright (outside stage).
+ * object-fit: contain — whole video visible, no cover crop.
+ */
+.display-root.display-root--portrait-rotate .display-stage {
+  inset: auto;
+  top: 50%;
+  left: 50%;
+  width: 100dvh;
+  height: 100dvw;
+  max-width: 100dvh;
+  max-height: 100dvw;
+  transform: translate(-50%, -50%) rotate(90deg);
+  transform-origin: center center;
+}
+
+/* Landscape player always fills the stage (desktop = viewport; phone = rotated stage) */
+.display-frame {
+  --display-frame-w: 100%;
+  --display-frame-h: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: #000;
+  flex: 0 0 auto;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  position: relative;
+  overflow: hidden;
+  width: var(--display-frame-w);
+  height: var(--display-frame-h);
+  min-width: var(--display-frame-w);
+  min-height: var(--display-frame-h);
+  max-width: var(--display-frame-w);
+  max-height: var(--display-frame-h);
+  pointer-events: none;
+  touch-action: none;
+}
+
+.display-ops-logout {
+  cursor: pointer;
+  min-height: 0;
+  line-height: 1.2;
+}
+
+.display-frame--landscape {
+  /* Full-bleed landscape stage; media letterboxes inside via contain */
+  --display-frame-w: 100%;
+  --display-frame-h: 100%;
+  width: 100%;
+  height: 100%;
+  min-width: 100%;
+  min-height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  aspect-ratio: auto;
+}
+
+/* Media fills the frame; contain letterboxes inside, never crops */
+.display-frame .display-media {
+  object-fit: contain;
+  object-position: center center;
+}
+
+/* Locked passenger stage: visible mouse cursor; ads stay non-interactive */
+.display-kiosk.display-kiosk--locked {
+  cursor: default;
+}
+
+.display-kiosk.display-kiosk--locked * {
+  cursor: default;
+}
+
+.display-ops-bar {
+  pointer-events: none;
+}
+
+.display-pin-overlay {
+  pointer-events: auto;
+  touch-action: manipulation;
+}
+
+.display-pin-key {
+  cursor: pointer;
+  min-height: 2.75rem;
+}
+
+.display-pin-key:active {
+  background: rgba(61, 214, 140, 0.22);
+}
+
+.display-media {
+  pointer-events: none;
+  -webkit-user-drag: none;
+  user-select: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+html:has(.display-root),
+body:has(.display-root) {
+  overflow: hidden;
+  height: 100%;
+  height: 100dvh;
+  background: #000;
+  overscroll-behavior: none;
+  touch-action: none;
+}

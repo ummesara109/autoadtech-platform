@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NiyoAds Admin — Live GPS</title>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    />
+    <style>
+      :root {
+        --ink: #14221a;
+        --muted: #5a6b60;
+        --bg: #e8f0ea;
+        --panel: #f7fbf8;
+        --accent: #1f6b4a;
+        --offline: #8a6a2b;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family: "Segoe UI", system-ui, sans-serif;
+        color: var(--ink);
+        background:
+          radial-gradient(1200px 600px at 10% -10%, #cfe8d8 0%, transparent 55%),
+          linear-gradient(180deg, #d9e8de, var(--bg));
+        min-height: 100vh;
+      }
+      header {
+        padding: 1rem 1.25rem 0.5rem;
+      }
+      h1 {
+        margin: 0;
+        font-size: 1.35rem;
+        letter-spacing: -0.02em;
+      }
+      p.sub {
+        margin: 0.35rem 0 0;
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+      .layout {
+        display: grid;
+        grid-template-columns: 1fr 320px;
+        gap: 0.75rem;
+        padding: 0.75rem 1.25rem 1.25rem;
+        height: calc(100vh - 5rem);
+      }
+      @media (max-width: 900px) {
+        .layout {
+          grid-template-columns: 1fr;
+          height: auto;
+        }
+        #map {
+          height: 420px !important;
+        }
+      }
+      #map {
+        height: 100%;
+        min-height: 360px;
+        border-radius: 12px;
+        border: 1px solid #b9cfc2;
+      }
+      aside {
+        background: var(--panel);
+        border: 1px solid #b9cfc2;
+        border-radius: 12px;
+        padding: 0.85rem;
+        overflow: auto;
+      }
+      .row {
+        border-bottom: 1px solid #d5e4db;
+        padding: 0.65rem 0;
+      }
+      .row:last-child {
+        border-bottom: 0;
+      }
+      .auto {
+        font-weight: 700;
+      }
+      .meta {
+        font-size: 0.78rem;
+        color: var(--muted);
+        margin-top: 0.2rem;
+      }
+      .pill {
+        display: inline-block;
+        font-size: 0.7rem;
+        font-weight: 700;
+        padding: 0.15rem 0.45rem;
+        border-radius: 999px;
+        margin-left: 0.35rem;
+        vertical-align: middle;
+      }
+      .on {
+        background: #d5f0e0;
+        color: var(--accent);
+      }
+      .off {
+        background: #f3e7c8;
+        color: var(--offline);
+      }
+      .empty {
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+      .status {
+        font-size: 0.75rem;
+        color: var(--muted);
+        margin-top: 0.5rem;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>NiyoAds Admin — Live GPS</h1>
+      <p class="sub">
+        Polls Display API <code>/api/location/fleet</code> — real
+        <code>device_gps</code> only (no seed/simulated points).
+      </p>
+    </header>
+    <div class="layout">
+      <div id="map"></div>
+      <aside>
+        <div id="list" class="empty">Waiting for device GPS…</div>
+        <div id="status" class="status"></div>
+      </aside>
+    </div>
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
+    <script>
+      const API =
+        new URLSearchParams(location.search).get("api") ||
+        "http://127.0.0.1:4100";
+      const map = L.map("map").setView([12.97, 77.59], 12);
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        attribution: "&copy; OpenStreetMap",
+      }).addTo(map);
+      const layer = L.layerGroup().addTo(map);
+      const listEl = document.getElementById("list");
+      const statusEl = document.getElementById("status");
+
+      async function tick() {
+        try {
+          const res = await fetch(API + "/api/location/fleet");
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.message || res.statusText);
+          const positions = data.positions || [];
+          layer.clearLayers();
+          if (!positions.length) {
+            listEl.className = "empty";
+            listEl.textContent =
+              "No live device_gps yet. Log into CMS Display, allow location, keep tab active.";
+          } else {
+            listEl.className = "";
+            listEl.innerHTML = positions
+              .map((p) => {
+                const online = p.online ? "on" : "off";
+                const label = p.online ? "Online" : "Offline";
+                const acc =
+                  p.accuracyM != null
+                    ? ` · ±${Math.round(p.accuracyM)} m`
+                    : "";
+                return (
+                  '<div class="row"><div class="auto">' +
+                  (p.autoNumber || p.vehicleId) +
+                  '<span class="pill ' +
+                  online +
+                  '">' +
+                  label +
+                  "</span></div>" +
+                  '<div class="meta">Updated ' +
+                  new Date(p.lastUpdated).toLocaleString() +
+                  acc +
+                  "</div></div>"
+                );
+              })
+              .join("");
+            const bounds = [];
+            for (const p of positions) {
+              const m = L.marker([p.lat, p.lng]).bindPopup(
+                "<b>" +
+                  (p.autoNumber || "") +
+                  "</b><br/>" +
+                  (p.online ? "Online" : "Offline") +
+                  "<br/>Updated " +
+                  new Date(p.lastUpdated).toLocaleString() +
+                  (p.accuracyM != null
+                    ? "<br/>Accuracy ±" + Math.round(p.accuracyM) + " m"
+                    : "")
+              );
+              m.addTo(layer);
+              bounds.push([p.lat, p.lng]);
+            }
+            if (bounds.length) map.fitBounds(bounds, { padding: [40, 40], maxZoom: 15 });
+          }
+          statusEl.textContent =
+            "Fetched " +
+            new Date(data.fetchedAt || Date.now()).toLocaleTimeString() +
+            " · " +
+            positions.length +
+            " vehicle(s)";
+        } catch (err) {
+          statusEl.textContent = "Fleet poll failed: " + err.message;
+        }
+      }
+      tick();
+      setInterval(tick, 5000);
+    </script>
+  </body>
+</html>

@@ -1,0 +1,31 @@
+﻿import { chromium } from "playwright";
+const SHOT = process.env.SHOT_OUT;
+async function loginAndDisplay(page) {
+  await page.goto("http://127.0.0.1:4173/?cb=" + Date.now(), { waitUntil: "domcontentloaded", timeout: 60000 });
+  await page.waitForTimeout(400);
+  await page.locator("input").first().fill("KA01AB1234");
+  const continueBtn = page.getByRole("button").filter({ hasText: /continue|send|next|otp/i }).first();
+  if (await continueBtn.count()) await continueBtn.click(); else await page.keyboard.press("Enter");
+  await page.waitForTimeout(900);
+  const inputs = page.locator("input:visible");
+  const n = await inputs.count();
+  if (n > 0) await inputs.nth(n - 1).fill("123456");
+  const verifyBtn = page.getByRole("button").filter({ hasText: /verify|login|sign|continue|submit/i }).first();
+  if (await verifyBtn.count()) await verifyBtn.click(); else await page.keyboard.press("Enter");
+  await page.waitForURL(/\/display/, { timeout: 30000 }).catch(() => {});
+  await page.waitForTimeout(2000);
+}
+const browser = await chromium.launch({ headless: true });
+const page = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+await loginAndDisplay(page);
+const hasRotate = await page.locator(".display-root").evaluate((el) => el.classList.contains("display-root--portrait-rotate"));
+const hvCount = await page.getByRole("button", { name: /horizontal|vertical/i }).count();
+await page.getByRole("button", { name: /log out/i }).click();
+await page.waitForTimeout(200);
+const pad = page.locator(".display-pin-pad");
+for (const d of "123456") await pad.getByRole("button", { name: d, exact: true }).click();
+await page.waitForTimeout(800);
+const leftDisplay = !page.url().includes("/display");
+console.log(JSON.stringify({ hasRotate, hvCount, leftDisplay, url: page.url() }));
+await page.screenshot({ path: SHOT, fullPage: false });
+await browser.close();

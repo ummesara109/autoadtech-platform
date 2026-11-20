@@ -1,0 +1,49 @@
+# Scaffold only — not used until a remote niyoads-cms repo exists and CI is enabled.
+name: CMS CI
+
+on:
+  push:
+    paths:
+      - 'api/**'
+      - 'web/**'
+      - 'supabase/migrations/**'
+      - '.github/workflows/cms-ci.yml'
+  pull_request:
+    paths:
+      - 'api/**'
+      - 'web/**'
+      - 'supabase/migrations/**'
+      - '.github/workflows/cms-ci.yml'
+
+jobs:
+  api:
+    name: NestJS API
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+      - run: npm ci
+      - run: npm run build
+
+  web:
+    name: React PWA
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run build
