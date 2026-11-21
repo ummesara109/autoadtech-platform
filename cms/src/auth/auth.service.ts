@@ -36,6 +36,13 @@ export class AuthService {
   ) {}
 
   get devAuthEnabled() {
+    const vercelEnv = this.config.get<string>('VERCEL_ENV');
+    const isProduction =
+      vercelEnv === 'production' ||
+      (this.config.get<string>('NODE_ENV') === 'production' &&
+        vercelEnv !== 'preview');
+    if (isProduction) return false;
+
     return (
       this.config.get<string>('CMS_DEV_AUTH') === 'true' ||
       !this.supabase.isConfigured

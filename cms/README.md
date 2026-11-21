@@ -71,10 +71,14 @@ Set the CMS server environment variables in the Vercel project settings. Keep
 `VITE_API_URL` empty for the browser PWA so it uses same-origin `/api` requests.
 Set `CORS_ORIGIN` to the allowed browser origins when the API is called cross-origin.
 
-For local seeded login, set `CMS_DEV_AUTH=true`; the local OTP is `123456`. Do not
-use development authentication or demo creatives in production. To use Supabase,
-put the API credentials in the ignored CMS-root `.env` file and set
-`CMS_DEV_AUTH=false`. The Supabase service-role/secret key must remain server-side.
+For local seeded login, set `CMS_DEV_AUTH=true`; the local OTP is `123456`. A
+protected Vercel Preview can also use this mode to test registered vehicles without
+SMS: set `CMS_DEV_AUTH=true` for Preview and configure the same Supabase project
+credentials used by Admin. The demo OTP applies only after the vehicle, active
+operator, and screen assignment are found in Supabase. Vercel Production and
+production Node deployments always disable demo authentication. To use Supabase
+SMS OTP, configure Phone Auth and an SMS provider, then set `CMS_DEV_AUTH=false`.
+The Supabase service-role/secret key must remain server-side.
 
 ## Production build and run
 
@@ -145,7 +149,7 @@ builds.
 | `CORS_ORIGIN` | Comma-separated allowed browser origins |
 | `SUPABASE_URL` | Existing Supabase project URL |
 | `SUPABASE_SERVICE_ROLE_KEY` / `SUPABASE_SECRET_KEY` | Server-side Supabase access |
-| `CMS_DEV_AUTH` | Local development OTP/seed mode |
+| `CMS_DEV_AUTH` | Local or protected Preview OTP/seed mode; disabled in Production |
 | `REDIS_URL` | OTP/session/dashboard cache |
 | `CMS_INTERNAL_KEY` | Protects internal ad-queue endpoints |
 | `ADMIN_GPS_URL` / `ADMIN_API_URL` | Admin API origin for CMS GPS forwarding |

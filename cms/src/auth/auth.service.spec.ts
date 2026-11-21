@@ -20,6 +20,51 @@ import type { SupabaseService } from '../supabase/supabase.service';
 import { AuthService } from './auth.service';
 import type { SessionPayload } from './auth.types';
 
+describe('AuthService.devAuthEnabled', () => {
+  const createAuth = (
+    settings: Record<string, string>,
+    supabaseConfigured: boolean,
+  ) => {
+    const config = {
+      get: jest.fn((key: string) => settings[key]),
+    } as unknown as ConfigService;
+    const supabase = { isConfigured: supabaseConfigured } as SupabaseService;
+    return new AuthService(
+      supabase,
+      {} as RedisService,
+      config,
+      {} as QueueService,
+      {} as LocationService,
+    );
+  };
+
+  it('disables demo auth in production even when explicitly enabled', () => {
+    const auth = createAuth(
+      {
+        CMS_DEV_AUTH: 'true',
+        NODE_ENV: 'production',
+        VERCEL_ENV: 'production',
+      },
+      true,
+    );
+
+    expect(auth.devAuthEnabled).toBe(false);
+  });
+
+  it('allows explicitly enabled demo auth on a Vercel Preview deployment', () => {
+    const auth = createAuth(
+      {
+        CMS_DEV_AUTH: 'true',
+        NODE_ENV: 'production',
+        VERCEL_ENV: 'preview',
+      },
+      true,
+    );
+
+    expect(auth.devAuthEnabled).toBe(true);
+  });
+});
+
 describe('AuthService.logout', () => {
   it('stops the session-bound GPS forwarding before clearing the session', async () => {
     const callOrder: string[] = [];
