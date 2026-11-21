@@ -8,7 +8,7 @@ In Vercel → Project → **Settings → General**:
 
 | Setting | Value |
 | --- | --- |
-| **Root Directory** | *empty* (repository root) — **not** `public` |
+| **Root Directory** | `admin` (this is a monorepo; do not use the repository root or `public`) |
 | **Framework Preset** | Other |
 | **Build Command** | leave empty |
 | **Output Directory** | leave empty — **not** `public` |
