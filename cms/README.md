@@ -163,6 +163,24 @@ builds.
 
 Never commit `.env` or expose Supabase/Admin secrets through a `VITE_*` variable.
 
+For protected Vercel Preview-to-Preview GPS forwarding, enable **Protection Bypass
+for Automation** in the Admin Vercel project. In the CMS Vercel project, set these
+server-side variables for **Preview only**:
+
+| Variable                                 | Value                                                                          |
+| ---------------------------------------- | ------------------------------------------------------------------------------ |
+| `ADMIN_GPS_PREVIEW_URL`                  | Admin branch Preview alias, such as `https://admin-git-branch-team.vercel.app` |
+| `ADMIN_PREVIEW_PROTECTION_BYPASS_SECRET` | The Admin project's generated Vercel automation bypass secret                  |
+| `CMS_GPS_INGEST_KEY`                     | Same server-to-server ingest key configured in Admin                           |
+
+CMS sends `x-vercel-protection-bypass` only when `VERCEL_ENV=preview` and the
+explicit HTTPS Admin branch Preview alias (`*.vercel.app` with `-git-` in the
+hostname) is configured; production-style URLs are not eligible. It continues sending
+`x-cms-ingest-key`; Admin validates that key before accepting GPS or persisting it
+to Supabase. Keep `ADMIN_GPS_URL` for the regular/Production Admin origin. The
+bypass secret is a server-side credential: never use a `VITE_*` variable or expose
+it to the browser. Production CMS requests never include the Preview bypass header.
+
 ## Supabase
 
 The application continues using the existing Supabase schema and migrations. Apply

@@ -52,17 +52,85 @@ export class AdminGpsClient implements OnModuleDestroy {
   private destroyed = false;
 
   private baseUrl(): string {
-    return (
-      process.env.ADMIN_GPS_URL ||
-      process.env.ADMIN_API_URL ||
-      ''
-    )
+    if (
+      process.env.VERCEL_ENV === 'preview' &&
+      process.env.ADMIN_GPS_PREVIEW_URL
+    ) {
+      return process.env.ADMIN_GPS_PREVIEW_URL.trim().replace(/\/+$/, '');
+    }
+
+    return (process.env.ADMIN_GPS_URL || process.env.ADMIN_API_URL || '')
       .trim()
       .replace(/\/+$/, '');
   }
 
   private ingestKey(): string {
     return String(process.env.CMS_GPS_INGEST_KEY || '').trim();
+  }
+
+  private previewProtectionBypassSecret(): string {
+    if (
+      process.env.VERCEL_ENV !== 'preview' ||
+      !process.env.ADMIN_GPS_PREVIEW_URL
+    ) {
+      return '';
+    }
+    try {
+      const target = new URL(process.env.ADMIN_GPS_PREVIEW_URL);
+      if (
+        target.protocol !== 'https:' ||
+        !target.hostname.endsWith('.vercel.app') ||
+        !target.hostname.includes('-git-') ||
+        target.pathname !== '/' ||
+        target.search ||
+        target.hash ||
+        target.username ||
+        target.password
+      ) {
+        return '';
+      }
+    } catch {
+      return '';
+    }
+    return String(
+      process.env.ADMIN_PREVIEW_PROTECTION_BYPASS_SECRET || '',
+    ).trim();
+  }
+
+  private requestHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'x-cms-ingest-key': this.ingestKey(),
+    };
+    const bypassSecret = this.previewProtectionBypassSecret();
+    if (bypassSecret) {
+      headers['x-vercel-protection-bypass'] = bypassSecret;
+    }
+    return headers;
+  }
+
+  private responseFailure(status: number, body: string): string {
+    if (
+      /Protected by Vercel Authentication/i.test(body) ||
+      /"vercel_auth_enabled"\s*:\s*true/i.test(body)
+    ) {
+      return 'Vercel Deployment Protection denied the request';
+    }
+    if (status === 401 || status === 403) {
+      return 'request authentication was denied';
+    }
+    if (status === 404)
+      return 'endpoint or active vehicle mapping was not found';
+    if (status === 409) return 'vehicle mapping conflict';
+    if (status === 400) return 'request validation failed';
+    if (status === 429) return 'Admin rate limit was reached';
+    if (status >= 500) return 'Admin API or Supabase persistence failed';
+    return 'Admin returned a non-success response';
+  }
+
+  private responseRequestId(res: Response): string {
+    const requestId = res.headers.get('x-vercel-id') ?? '';
+    return /^[a-zA-Z0-9:_-]{1,128}$/.test(requestId) ? requestId : '';
   }
 
   /** Retry cadence after Admin network failures (ms). */
@@ -139,19 +207,21 @@ export class AdminGpsClient implements OnModuleDestroy {
     try {
       const res = await fetch(url, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-cms-ingest-key': this.ingestKey(),
-        },
+        headers: this.requestHeaders(),
         body: JSON.stringify(payload),
         signal: AbortSignal.timeout(8_000),
       });
 
       if (!res.ok) {
         const text = await res.text().catch(() => '');
+        const requestId = this.responseRequestId(res);
         this.logger.warn(
-          `Admin GPS stop ${res.status}: ${text.slice(0, 300)}`,
+          `Admin GPS stop failed: HTTP ${res.status}; ${this.responseFailure(res.status, text)}${
+            requestId ? `; Vercel request ${requestId}` : ''
+          }`,
         );
+      } else {
+        this.logger.debug(`Admin GPS stop accepted: HTTP ${res.status}`);
       }
     } catch (err) {
       this.logger.warn(
@@ -165,10 +235,7 @@ export class AdminGpsClient implements OnModuleDestroy {
     try {
       const res = await fetch(url, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-cms-ingest-key': this.ingestKey(),
-        },
+        headers: this.requestHeaders(),
         body: JSON.stringify({
           ...payload,
           onlineThresholdMs: this.onlineThresholdMs(),
@@ -178,11 +245,15 @@ export class AdminGpsClient implements OnModuleDestroy {
 
       if (!res.ok) {
         const text = await res.text().catch(() => '');
+        const requestId = this.responseRequestId(res);
         this.logger.warn(
-          `Admin GPS upsert ${res.status}: ${text.slice(0, 300)}`,
+          `Admin GPS upsert failed: HTTP ${res.status}; ${this.responseFailure(res.status, text)}${
+            requestId ? `; Vercel request ${requestId}` : ''
+          }`,
         );
         return false;
       }
+      this.logger.debug(`Admin GPS upsert accepted: HTTP ${res.status}`);
       return true;
     } catch (err) {
       this.logger.warn(
