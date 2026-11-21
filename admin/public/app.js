@@ -108,7 +108,7 @@ const S = {
   users: { t: "Users & Roles", add: "Add user", def: { status: "Active", role: "Manager" }, f: [["name", "Name"], ["email", "Email", "email"], ["role", "Role", ["Super Admin", "Admin", "Manager", "Viewer", "Support"]], ["status", "Status", ST], ["password", "Password", "password"]] },
   advertisers: { t: "Advertisers", add: "Add advertiser", def: { status: "Approved" }, f: [["name", "Business name"], ["email", "Login email", "email"], ["status", "Status", APP], ["password", "Password", "password"]] },
   partners: { t: "Drivers & Partners", add: "Add partner", def: { status: "Active" }, f: [["name", "Name"], ["phone", "Phone", "tel"], ["vehicle", "Vehicle no.", vehOpts], ["status", "Status", ["Active", "Pending", "Inactive"]]] },
-  vehicles: { t: "Vehicles", add: "Add vehicle", def: { status: "Active" }, f: [["no", "Vehicle no."], ["owner", "Owner name"], ["phone", "Operator phone (required for live OTP; optional in demo mode)", "tel"], ["area", "Area (Bengaluru)", () => META.areas], ["status", "Status", ST]] },
+  vehicles: { t: "Vehicles", add: "Add vehicle", def: { status: "Active" }, f: [["no", "Vehicle no."], ["owner", "Owner name"], ["phone", "Operator phone (required for live OTP; optional only for configured demo vehicles or partner fallback)", "tel"], ["area", "Area (Bengaluru)", () => META.areas], ["status", "Status", ST]] },
   devices: { t: "Device Management", add: "Register device", def: { status: "Online" }, f: [["dev", "Device ID"], ["vehicle", "Vehicle no.", vehOpts], ["status", "Status", ["Online", "Offline", "Maintenance"]], ["seen", "Last seen", "ago"]] },
   campaigns: { t: "Campaigns", add: "Create campaign", def: { status: "Pending" }, tabs: ["All", "Pending", "Approved", "Rejected"], tabKey: "status", f: [["name", "Campaign name"], ["adv", "Advertiser", advOpts], ["start", "Start date", "date"], ["end", "End date", "date"], ["status", "Status", APP]] },
   inventory: { t: "Inventory & Pricing", add: "Add package", def: { status: "Active" }, f: [["name", "Package name"], ["dur", "Duration", ["1 week", "1 month", "3 months", "6 months", "1 year"]], ["price", "Price (₹)", "money"], ["status", "Status", ST]] },
@@ -125,9 +125,8 @@ const GROUPS = {
   client: [["Overview", ["dashboard"]], ["Advertising", ["campaigns", "inventory"]], ["Finance", ["billing"]], ["Help", ["support"]]]
 };
 const HIDECOL = { billing: ["adv"], campaigns: ["adv"], support: ["user"] }, FORMHIDE = { campaigns: ["adv", "status"], support: ["user", "status"] };
-/** Fields that may be left blank on create/edit (browser + form). */
-const OPTIONAL = { vehicles: ["phone"] };
-const isOptional = (k, key) => (OPTIONAL[k] || []).includes(key);
+/** Server validates whether a blank vehicle phone is allowed for this record. */
+const isOptional = (k, key) => k === "vehicles" && key === "phone";
 const vis = k => S[k].f.filter(f => f[2] !== "password" && !(PORTAL === "client" && (HIDECOL[k] || []).includes(f[0])));
 const AV = ["users", "advertisers", "partners"];
 
@@ -724,8 +723,9 @@ function formModal(k, row) {
   const fields = s.f.filter(f => f[2] !== "ago" && !hid.includes(f[0])).map(([key, label, type]) => {
     let val = row ? row[key] : (s.def && s.def[key]) ?? ""; if (!row && key === "date") val = today();
     const opts = typeof type === "function" ? type() : type;
-    const req = isOptional(k, key) ? "" : "required";
-    const ph = isOptional(k, key) ? ' placeholder="Optional — leave blank if unknown"' : "";
+    const optional = isOptional(k, key);
+    const req = optional ? "" : "required";
+    const ph = optional ? ' placeholder="Required for live OTP unless assigned partner has a phone"' : "";
     if (Array.isArray(opts)) return `<label for="f_${key}">${label}</label><select id="f_${key}" name="${key}" ${req}>${isNew && !val ? `<option value="">Select…</option>` : ""}${opts.map(o => `<option ${o === val ? "selected" : ""}>${esc(o)}</option>`).join("")}</select>`;
     if (type === "password") return `<label for="f_${key}">${label}</label><input id="f_${key}" name="${key}" type="password" autocomplete="new-password" ${isNew ? "required" : ""} minlength="6" placeholder="${isNew ? "Minimum 6 characters" : "Leave blank to keep current"}">`;
     return `<label for="f_${key}">${label}</label><input id="f_${key}" name="${key}" type="${type === "money" ? "number" : type || "text"}" ${type === "money" ? 'min="0" step="1"' : ""} value="${esc(val)}" ${req}${ph}>`;

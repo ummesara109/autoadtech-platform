@@ -57,14 +57,20 @@ export class LocationController {
     return this.location.listFleet();
   }
 
-  private assertFleetAccess(
-    internalKey?: string,
-    authorization?: string,
-  ) {
+  private assertFleetAccess(internalKey?: string, authorization?: string) {
+    const vercelEnv = this.config.get<string>('VERCEL_ENV');
+    const isProduction =
+      vercelEnv === 'production' ||
+      (this.config.get<string>('NODE_ENV') === 'production' &&
+        vercelEnv !== 'preview');
     const dev =
-      this.config.get<string>('CMS_DEV_AUTH') === 'true' ||
-      !this.config.get<string>('SUPABASE_URL') ||
-      String(this.config.get<string>('SUPABASE_URL')).includes('YOUR_PROJECT');
+      !isProduction &&
+      (this.config.get<string>('CMS_DEV_AUTH')?.trim().toLowerCase() ===
+        'true' ||
+        !this.config.get<string>('SUPABASE_URL') ||
+        String(this.config.get<string>('SUPABASE_URL')).includes(
+          'YOUR_PROJECT',
+        ));
     if (dev) return;
 
     const expected = this.config.get<string>('CMS_INTERNAL_KEY')?.trim();

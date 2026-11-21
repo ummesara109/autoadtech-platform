@@ -39,6 +39,7 @@ const gpsByAuto = new Map();
 
 let seeded = false;
 let supabaseAvailable = null;
+let gpsRefreshPromise = null;
 
 function normalizeAutoNumber(raw) {
   return String(raw || "")
@@ -305,6 +306,21 @@ async function initCmsGps() {
   ensureSeeded();
   await refreshLinksFromSupabase();
   await refreshGpsFromSupabase();
+}
+
+async function refreshLiveGps() {
+  ensureSeeded();
+  if (supabaseAvailable === false) return;
+  if (gpsRefreshPromise) {
+    await gpsRefreshPromise;
+    return;
+  }
+  gpsRefreshPromise = refreshGpsFromSupabase();
+  try {
+    await gpsRefreshPromise;
+  } finally {
+    gpsRefreshPromise = null;
+  }
 }
 
 /**
@@ -1037,6 +1053,7 @@ module.exports = {
   ensureAdminDevice,
   stampDevice,
   initCmsGps,
+  refreshLiveGps,
   upsertFromCms,
   stopFromCms,
   listFleet,

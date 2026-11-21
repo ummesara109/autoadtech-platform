@@ -71,15 +71,16 @@ Set the CMS server environment variables in the Vercel project settings. Keep
 `VITE_API_URL` empty for the browser PWA so it uses same-origin `/api` requests.
 Set `CORS_ORIGIN` to the allowed browser origins when the API is called cross-origin.
 
-For local seeded login, set `CMS_DEV_AUTH=true`; the local OTP is `123456`. A
-protected Vercel Preview can also use this mode to test registered vehicles without
-SMS: set `CMS_DEV_AUTH=true` for Preview in both CMS and Admin Vercel projects and
-configure the same Supabase project credentials in both. The demo OTP does not
-require an operator phone, but the registered vehicle, active operator, and screen
-assignment must exist in Supabase. Vercel Production and production Node deployments
-always disable demo authentication, even if the variable is accidentally set. To
-use Supabase SMS OTP, configure Phone Auth and an SMS provider, then set
-`CMS_DEV_AUTH=false`. The Supabase service-role/secret key must remain server-side.
+For local seeded login, set `CMS_DEV_AUTH=true`; the existing demo OTP is `123456`.
+The same demo OTP can be enabled on Vercel Production by setting `CMS_DEV_AUTH=true`
+in both CMS and Admin Vercel projects. Demo mode is limited to the configured
+`CMS_DEMO_VEHICLES` allowlist (default: `KA01AB1234,KA02CD5678`) and each plate
+must still resolve to a registered Supabase vehicle with an active operator and
+assigned screen. Demo login does not require an operator phone and never sends an
+SMS. The flag does not enable demo login for other registered plates or open
+internal queue/fleet endpoints. Set `CMS_DEV_AUTH=false` to use live Supabase Phone
+Authentication instead. The Supabase service-role/secret key must remain
+server-side.
 
 ## Production build and run
 
@@ -150,8 +151,10 @@ builds.
 | `CORS_ORIGIN` | Comma-separated allowed browser origins |
 | `SUPABASE_URL` | Existing Supabase project URL |
 | `SUPABASE_SERVICE_ROLE_KEY` / `SUPABASE_SECRET_KEY` | Server-side Supabase access |
-| `CMS_DEV_AUTH` | Local or protected Preview OTP/seed mode; disabled in Production |
-| `REDIS_URL` | OTP/session/dashboard cache |
+| `CMS_DEV_AUTH` | Set to `true` in both Admin and CMS Vercel projects to enable allowlisted demo OTP, including Production; set `false` for live SMS OTP |
+| `CMS_DEMO_AUTH` | Optional local/Preview demo switch; does not enable Production demo authentication |
+| `CMS_DEMO_VEHICLES` | Optional comma-separated demo plate allowlist; defaults to `KA01AB1234,KA02CD5678` |
+| `REDIS_URL` | Shared OTP/session/dashboard cache; required in Vercel Preview and Production |
 | `CMS_INTERNAL_KEY` | Protects internal ad-queue endpoints |
 | `ADMIN_GPS_URL` / `ADMIN_API_URL` | Admin API origin for CMS GPS forwarding |
 | `CMS_GPS_INGEST_KEY` | Server-to-server Admin ingest key |
@@ -162,6 +165,33 @@ builds.
 | `VITE_GPS_POST_INTERVAL_MS` | Optional browser GPS reporting interval |
 
 Never commit `.env` or expose Supabase/Admin secrets through a `VITE_*` variable.
+
+For Production demo OTP, set `CMS_DEV_AUTH=true` in the **Production** environment
+of both Vercel projects. Set `CMS_DEMO_VEHICLES` in both projects only if you want
+to override the two built-in demo plates. The Admin backend uses this setting when
+provisioning vehicles; the CMS backend reads it at runtime through Nest
+`ConfigModule`. Redeploy both projects after changing environment variables.
+Provide `SUPABASE_URL` and either `SUPABASE_SERVICE_ROLE_KEY` or
+`SUPABASE_SECRET_KEY` server-side in both projects, pointing to the same project.
+The CMS project also needs a reachable shared `REDIS_URL`; the API rejects
+production OTP requests when Redis is unavailable. Leave `VITE_API_URL` empty for
+same-origin `/api` routing. Never expose a service key, SMS credentials, or phone
+number through a `VITE_*` variable.
+
+Ensure each demo plate exists in `cms_vehicles`, has an active row in
+`cms_operators`, and has exactly one active assigned screen in
+`cms_screen_assignments`/`cms_screens`. An actual phone number is not needed for
+these demo records. Admin can provision the built-in demo vehicles without one
+when `CMS_DEV_AUTH=true`; non-demo vehicles still require a valid phone on the
+vehicle or its assigned partner for live OTP. Partner changes continue to refresh
+the linked CMS vehicle. No schema migration is required.
+
+For future live SMS operation, set `CMS_DEV_AUTH=false` in both projects. Enable
+**Authentication → Sign In / Providers → Phone** in the shared Supabase project
+and configure an SMS provider with valid credentials and India delivery enabled.
+Verify sender ID/template requirements and Supabase Auth SMS rate limits with the
+provider. Live operator phones are normalized to `+91` before Supabase Auth sends
+SMS. Do not configure Supabase test-phone OTPs for Production.
 
 For protected Vercel Preview-to-Preview GPS forwarding, enable **Protection Bypass
 for Automation** in the Admin Vercel project. In the CMS Vercel project, set these
@@ -185,8 +215,9 @@ it to the browser. Production CMS requests never include the Preview bypass head
 
 The application continues using the existing Supabase schema and migrations. Apply
 the migrations in `supabase/migrations/` to the existing project; do not create
-duplicate tables. Production OTP requires Supabase Phone Auth to be enabled and
-`CMS_DEV_AUTH=false`.
+duplicate tables. Production demo login requires registered vehicle/operator/
+screen rows and server-side Supabase credentials. Supabase Phone Auth and an SMS
+provider are required only when `CMS_DEV_AUTH=false` and live SMS OTP is used.
 
 ## Validation
 

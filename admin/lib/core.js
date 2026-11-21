@@ -114,7 +114,7 @@ const SC = {
 
   vehicles: {
     f: ["no", "owner", "phone", "area", "status"],
-    /** May be blank — CMS provision uses provisional mobile when empty. */
+    /** A blank phone is allowed only when an assigned partner supplies it. */
     optional: ["phone"],
     en: {
       area: AREA_NAMES,
@@ -943,6 +943,20 @@ function validate(col, b, existing, au) {
   return o;
 }
 
+async function provisionPartnerVehicles(partners, vehicleNumbers) {
+  const affected = new Set(
+    vehicleNumbers
+      .map(value => cmsGps.normalizeAutoNumber(value))
+      .filter(Boolean)
+  );
+  const provisioningDb = { ...db, partners };
+  for (const vehicle of db.vehicles) {
+    if (affected.has(cmsGps.normalizeAutoNumber(vehicle.no))) {
+      await cmsProvision.provisionVehicleForCms(provisioningDb, vehicle);
+    }
+  }
+}
+
 /* ---------- Live device simulation (computed on request) ---------- */
 
 /*
@@ -1298,6 +1312,7 @@ async function api(req, res, pathname) {
       - Production (Vercel) disables dummy sim unless ALLOW_LIVE_SIM=true
       - Payload is poll/Realtime-ready: autoNumber, accuracy, lastUpdated, online
     */
+    await cmsGps.refreshLiveGps();
     const disableSim = cmsGps.liveSimDisabled();
     if (!disableSim) tickSimulation();
 
@@ -1500,6 +1515,9 @@ async function api(req, res, pathname) {
       /* Fail before save if CMS tables/env missing — keeps Admin↔CMS consistent. */
       cmsProvisionResult = await cmsProvision.provisionVehicleForCms(db, rec);
     }
+    if (col === "partners") {
+      await provisionPartnerVehicles([rec, ...db.partners], [rec.vehicle]);
+    }
 
     db[col].unshift(rec);
 
@@ -1573,6 +1591,17 @@ async function api(req, res, pathname) {
       });
     }
 
+    if (col === "partners") {
+      const nextPartner = { ...rec, ...o };
+      const nextPartners = db.partners.map(
+        partner => partner === rec ? nextPartner : partner
+      );
+      await provisionPartnerVehicles(nextPartners, [
+        rec.vehicle,
+        nextPartner.vehicle
+      ]);
+    }
+
     Object.assign(rec, o);
 
     let cmsProvisionResult = null;
@@ -1623,6 +1652,13 @@ async function api(req, res, pathname) {
       db.campaigns.some(c => c.adv === rec.name)
     ) {
       throw E(409, "This advertiser still has campaigns");
+    }
+
+    if (col === "partners") {
+      await provisionPartnerVehicles(
+        db.partners.filter(partner => partner !== rec),
+        [rec.vehicle]
+      );
     }
 
     db[col] = db[col].filter(r => r !== rec);

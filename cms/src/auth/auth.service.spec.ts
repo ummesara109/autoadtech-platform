@@ -28,8 +28,12 @@ function createAuthHarness(
 ) {
   const challenges = new Map<string, string>();
   const sessions = new Map<string, string>();
+  const counters = new Map<string, number>();
   const redis = {
-    get: jest.fn(async (key: string) => challenges.get(key) ?? sessions.get(key) ?? null),
+    isAvailable: true,
+    get: jest.fn(
+      async (key: string) => challenges.get(key) ?? sessions.get(key) ?? null,
+    ),
     set: jest.fn(async (key: string, value: string) => {
       if (key.startsWith('cms:otp:')) challenges.set(key, value);
       else sessions.set(key, value);
@@ -37,12 +41,19 @@ function createAuthHarness(
     del: jest.fn(async (key: string) => {
       challenges.delete(key);
       sessions.delete(key);
+      counters.delete(key);
+    }),
+    incrementWithTtl: jest.fn(async (key: string) => {
+      const count = (counters.get(key) ?? 0) + 1;
+      counters.set(key, count);
+      return count;
     }),
   };
   const verifyOtp = jest.fn().mockResolvedValue({
     data: { session: null },
     error: { message: 'Invalid OTP' },
   });
+  const signInWithOtp = jest.fn().mockResolvedValue({ error: null });
   const from = jest.fn((table: string) => {
     const filters: Array<{
       type: 'eq' | 'ilike' | 'in';
@@ -54,8 +65,10 @@ function createAuthHarness(
         filters.every(({ type, column, value }) => {
           if (type === 'eq') return row[column] === value;
           if (type === 'ilike') {
-            return String(row[column] ?? '').toLowerCase() ===
-              String(value).toLowerCase();
+            return (
+              String(row[column] ?? '').toLowerCase() ===
+              String(value).toLowerCase()
+            );
           }
           return Array.isArray(value) && value.includes(row[column]);
         }),
@@ -65,8 +78,13 @@ function createAuthHarness(
       eq: jest.Mock;
       ilike: jest.Mock;
       in: jest.Mock;
+      update: jest.Mock;
+      insert: jest.Mock;
       maybeSingle: jest.Mock;
-      then: (resolve: (value: unknown) => unknown, reject: (error: unknown) => unknown) => Promise<unknown>;
+      then: (
+        resolve: (value: unknown) => unknown,
+        reject: (error: unknown) => unknown,
+      ) => Promise<unknown>;
     } = {
       select: jest.fn(() => query),
       eq: jest.fn((column: string, value: unknown) => {
@@ -81,6 +99,8 @@ function createAuthHarness(
         filters.push({ type: 'in', column, value });
         return query;
       }),
+      update: jest.fn(() => query),
+      insert: jest.fn(() => query),
       maybeSingle: jest.fn(async () => ({
         data: matchingRows()[0] ?? null,
         error: null,
@@ -93,7 +113,7 @@ function createAuthHarness(
     };
     return query;
   });
-  const client = { from, auth: { verifyOtp } };
+  const client = { from, auth: { verifyOtp, signInWithOtp } };
   const supabase = { isConfigured: true, client } as unknown as SupabaseService;
   const config = {
     get: jest.fn((key: string) => settings[key]),
@@ -108,7 +128,7 @@ function createAuthHarness(
     queue,
     {} as LocationService,
   );
-  return { auth, redis, verifyOtp, from, queue };
+  return { auth, redis, verifyOtp, signInWithOtp, from, queue };
 }
 
 function registeredVehicleRows(): Record<string, TestRow[]> {
@@ -150,6 +170,7 @@ function registeredVehicleRows(): Record<string, TestRow[]> {
 describe('AuthService demo OTP vehicle flow', () => {
   const previewSettings = {
     CMS_DEV_AUTH: 'true',
+    CMS_DEMO_VEHICLES: 'KA01AB0001,KA02CD0002',
     NODE_ENV: 'production',
     VERCEL_ENV: 'preview',
   };
@@ -192,6 +213,157 @@ describe('AuthService demo OTP vehicle flow', () => {
     );
   });
 
+  it('rejects a registered demo vehicle without an active assigned screen', async () => {
+    const tables = registeredVehicleRows();
+    tables.cms_screen_assignments = [];
+    const { auth, signInWithOtp } = createAuthHarness(
+      previewSettings,
+      tables,
+    );
+
+    await expect(auth.lookupAutoNumber('KA01AB0001')).rejects.toThrow(
+      'No screen assigned to this Auto Number',
+    );
+    expect(signInWithOtp).not.toHaveBeenCalled();
+  });
+
+  it('allows Production demo OTP for the two registered demo vehicles without phones', async () => {
+    const tables = registeredVehicleRows();
+    tables.cms_vehicles[0].auto_number = 'KA01AB1234';
+    tables.cms_vehicles[1].auto_number = 'KA02CD5678';
+    const { auth, verifyOtp, signInWithOtp, from, queue } = createAuthHarness(
+      {
+        CMS_DEV_AUTH: 'true',
+        NODE_ENV: 'production',
+        VERCEL_ENV: 'production',
+      },
+      tables,
+    );
+
+    for (const [autoNumber, vehicleId, screenId] of [
+      ['KA01AB1234', 'vehicle-1', 'screen-1'],
+      ['KA02CD5678', 'vehicle-2', 'screen-2'],
+    ]) {
+      const lookup = await auth.lookupAutoNumber(autoNumber);
+      expect(lookup.devMode).toBe(true);
+      expect(lookup.maskedMobile).toBe('Demo OTP');
+
+      const session = await auth.verifyOtp(lookup.challengeId, '123456');
+      expect(session.operator.vehicleId).toBe(vehicleId);
+      expect(session.operator.autoNumber).toBe(autoNumber);
+      expect(session.screen.id).toBe(screenId);
+    }
+
+    expect(signInWithOtp).not.toHaveBeenCalled();
+    expect(verifyOtp).not.toHaveBeenCalled();
+    expect(from).not.toHaveBeenCalledWith('cms_otp_challenges');
+    expect(queue.ensureDevDemoAdsIfEmpty).toHaveBeenCalledTimes(2);
+  });
+
+  it('blocks registered non-demo vehicles when Production demo mode is enabled', async () => {
+    const tables = registeredVehicleRows();
+    tables.cms_vehicles[0].registered_mobile = '9876543210';
+    tables.cms_vehicles[0].mobile_e164 = '+919876543210';
+    const { auth, signInWithOtp } = createAuthHarness(
+      {
+        CMS_DEV_AUTH: 'true',
+        NODE_ENV: 'production',
+        VERCEL_ENV: 'production',
+      },
+      tables,
+    );
+
+    await expect(auth.lookupAutoNumber('KA01AB0001')).rejects.toThrow(
+      'Demo OTP is restricted to the configured demo vehicles.',
+    );
+    expect(signInWithOtp).not.toHaveBeenCalled();
+  });
+
+  it('rate limits repeated lookups for the same vehicle', async () => {
+    const { auth, redis } = createAuthHarness(
+      previewSettings,
+      registeredVehicleRows(),
+    );
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await auth.lookupAutoNumber('KA01AB0001');
+    }
+
+    await expect(auth.lookupAutoNumber('KA01AB0001')).rejects.toThrow(
+      'Too many OTP requests for this vehicle.',
+    );
+    expect(redis.incrementWithTtl).toHaveBeenCalledTimes(6);
+  });
+
+  it('continues normal OTP for non-demo Production vehicles', async () => {
+    const tables = registeredVehicleRows();
+    tables.cms_vehicles[0].auto_number = 'KA01AB5555';
+    tables.cms_vehicles[0].registered_mobile = '9876543210';
+    tables.cms_vehicles[0].mobile_e164 = '+919876543210';
+    tables.cms_vehicles[1].registered_mobile = '9999999999';
+    tables.cms_vehicles[1].mobile_e164 = '+919999999999';
+    const { auth, signInWithOtp, verifyOtp } = createAuthHarness(
+      {
+        CMS_DEV_AUTH: 'false',
+        NODE_ENV: 'production',
+        VERCEL_ENV: 'production',
+      },
+      tables,
+    );
+
+    const lookup = await auth.lookupAutoNumber('KA02CD0002');
+    expect(lookup.devMode).toBe(false);
+    expect(signInWithOtp).toHaveBeenCalledWith({ phone: '+919999999999' });
+    await expect(auth.verifyOtp(lookup.challengeId, '123456')).rejects.toThrow(
+      'Invalid or expired OTP',
+    );
+    expect(verifyOtp).toHaveBeenCalledWith({
+      phone: '+919999999999',
+      token: '123456',
+      type: 'sms',
+    });
+  });
+
+  it('returns a sanitized actionable message when Supabase SMS is not configured', async () => {
+    const tables = registeredVehicleRows();
+    tables.cms_vehicles[0].registered_mobile = '9876543210';
+    tables.cms_vehicles[0].mobile_e164 = '+919876543210';
+    const { auth, signInWithOtp } = createAuthHarness(
+      {
+        NODE_ENV: 'production',
+        VERCEL_ENV: 'production',
+      },
+      tables,
+    );
+    signInWithOtp.mockResolvedValueOnce({
+      error: {
+        code: 'sms_provider_not_configured',
+        status: 500,
+        message: 'SMS provider is not configured for +919876543210',
+      },
+    });
+
+    await expect(auth.lookupAutoNumber('KA01AB0001')).rejects.toThrow(
+      /Configure and enable a Phone SMS provider.*code sms_provider_not_configured/,
+    );
+  });
+
+  it('does not issue OTPs from a Vercel instance without shared Redis storage', async () => {
+    const { auth, redis, signInWithOtp } = createAuthHarness(
+      {
+        VERCEL: '1',
+        VERCEL_ENV: 'production',
+      },
+      registeredVehicleRows(),
+    );
+    redis.isAvailable = false;
+
+    await expect(auth.lookupAutoNumber('KA01AB0001')).rejects.toThrow(
+      'Shared OTP storage is unavailable. Configure REDIS_URL',
+    );
+    expect(signInWithOtp).not.toHaveBeenCalled();
+  });
+
   it('requires CMS_DEV_AUTH=true explicitly in Preview', () => {
     const { auth } = createAuthHarness(
       {
@@ -203,6 +375,19 @@ describe('AuthService demo OTP vehicle flow', () => {
     );
 
     expect(auth.devAuthEnabled).toBe(false);
+  });
+
+  it('accepts uppercase CMS_DEV_AUTH values in Preview', () => {
+    const { auth } = createAuthHarness(
+      {
+        CMS_DEV_AUTH: 'TRUE',
+        NODE_ENV: 'production',
+        VERCEL_ENV: 'preview',
+      },
+      {},
+    );
+
+    expect(auth.devAuthEnabled).toBe(true);
   });
 
   it('does not accept 123456 as demo auth in Production', async () => {
@@ -224,14 +409,11 @@ describe('AuthService demo OTP vehicle flow', () => {
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
       createdAt: new Date().toISOString(),
     };
-    await redis.set(
-      'cms:otp:production-challenge',
-      JSON.stringify(challenge),
-    );
+    await redis.set('cms:otp:production-challenge', JSON.stringify(challenge));
 
     await expect(
       auth.verifyOtp('production-challenge', '123456'),
-    ).rejects.toThrow('Invalid OTP');
+    ).rejects.toThrow('Invalid or expired OTP');
     expect(verifyOtp).toHaveBeenCalledWith({
       phone: '+919876543210',
       token: '123456',

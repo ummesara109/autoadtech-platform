@@ -4,8 +4,10 @@ import { ApiError, api, type DashboardResponse } from '../lib/api';
 import { clearSession, loadSession } from '../lib/session';
 import {
   getSilentGpsError,
+  getSilentGpsStatus,
   startSilentGps,
   stopSilentGps,
+  type SilentGpsStatus,
 } from '../lib/silentGps';
 
 /** Top-left corner long-press (ms) to open operator chrome — not discoverable by passengers. */
@@ -151,6 +153,8 @@ export function DisplayScreen() {
   const [otpError, setOtpError] = useState<string | null>(null);
   const [mediaError, setMediaError] = useState(false);
   const [gpsError, setGpsError] = useState(getSilentGpsError);
+  const [gpsStatus, setGpsStatus] =
+    useState<SilentGpsStatus>(getSilentGpsStatus);
   const [activeSlot, setActiveSlot] = useState<0 | 1>(0);
   const [slotSrc, setSlotSrc] = useState<[string | null, string | null]>([
     null,
@@ -166,15 +170,19 @@ export function DisplayScreen() {
 
   useEffect(() => {
     const onGpsStatus = (event: Event) => {
-      setGpsError(
-        (event as CustomEvent<{ error: string | null }>).detail.error,
-      );
+      const detail = (
+        event as CustomEvent<{
+          status: SilentGpsStatus;
+          error: string | null;
+        }>
+      ).detail;
+      setGpsStatus(detail.status);
+      setGpsError(detail.error);
     };
     window.addEventListener('niyoads:gps-status', onGpsStatus);
     return () => window.removeEventListener('niyoads:gps-status', onGpsStatus);
   }, []);
-  const rotateStage =
-    viewportPortrait && searchParams.get('noRotate') !== '1';
+  const rotateStage = viewportPortrait && searchParams.get('noRotate') !== '1';
 
   function clearOpsHideTimer() {
     if (opsHideTimer.current) {
@@ -276,7 +284,10 @@ export function DisplayScreen() {
       } catch (err) {
         if (!cancelled) {
           // Keep last dashboard snapshot when offline; only clear creative on auth loss.
-          if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+          if (
+            err instanceof ApiError &&
+            (err.status === 401 || err.status === 403)
+          ) {
             void stopSilentGps(session?.accessToken);
             clearSession();
             navigate('/', { replace: true });
@@ -313,14 +324,22 @@ export function DisplayScreen() {
     const guardToken = 'cms-display-kiosk';
     try {
       if (window.history.state?.cmsDisplayKiosk !== true) {
-        window.history.pushState({ cmsDisplayKiosk: true, guardToken }, '', window.location.href);
+        window.history.pushState(
+          { cmsDisplayKiosk: true, guardToken },
+          '',
+          window.location.href,
+        );
       }
     } catch {
       /* ignore */
     }
     const onPopState = () => {
       try {
-        window.history.pushState({ cmsDisplayKiosk: true, guardToken }, '', window.location.href);
+        window.history.pushState(
+          { cmsDisplayKiosk: true, guardToken },
+          '',
+          window.location.href,
+        );
       } catch {
         /* ignore */
       }
@@ -645,7 +664,10 @@ export function DisplayScreen() {
   }
 
   const showVideoFrame = Boolean(
-    canShowCreative && mediaUrl && isVideoUrl(mediaUrl) && (slotSrc[0] || slotSrc[1]),
+    canShowCreative &&
+    mediaUrl &&
+    isVideoUrl(mediaUrl) &&
+    (slotSrc[0] || slotSrc[1]),
   );
   const showImageFrame = Boolean(canShowCreative && imageSrc);
 
@@ -713,7 +735,9 @@ export function DisplayScreen() {
                       ensureInlineMuted(el);
                     }}
                     className={`display-media absolute inset-0 h-full w-full object-contain bg-black ${
-                      activeSlot === slot ? 'z-[1] opacity-100' : 'z-0 opacity-0'
+                      activeSlot === slot
+                        ? 'z-[1] opacity-100'
+                        : 'z-0 opacity-0'
                     }`}
                     src={slotSrc[slot] ?? undefined}
                     muted
@@ -727,10 +751,12 @@ export function DisplayScreen() {
                     onContextMenu={blockSurfaceInteraction}
                     onClick={blockSurfaceInteraction}
                     onLoadedData={() => {
-                      if (activeSlot === slot) void tryPlay(slotRefs[slot].current);
+                      if (activeSlot === slot)
+                        void tryPlay(slotRefs[slot].current);
                     }}
                     onCanPlay={() => {
-                      if (activeSlot === slot) void tryPlay(slotRefs[slot].current);
+                      if (activeSlot === slot)
+                        void tryPlay(slotRefs[slot].current);
                     }}
                     onEnded={() => {
                       if (activeSlot === slot && playing?.id) {
@@ -766,6 +792,26 @@ export function DisplayScreen() {
         >
           {gpsError}
         </div>
+      ) : gpsStatus !== 'idle' ? (
+        <div
+          className={`pointer-events-none absolute inset-x-3 bottom-3 z-20 mx-auto max-w-xl rounded-lg border px-3 py-2 text-center text-xs ${
+            gpsStatus === 'active'
+              ? 'border-emerald-400/40 bg-emerald-950/90 text-emerald-100'
+              : 'border-slate-400/40 bg-slate-950/90 text-slate-100'
+          }`}
+          role="status"
+          aria-live="polite"
+        >
+          {gpsStatus === 'requesting'
+            ? 'Requesting phone location permission…'
+            : gpsStatus === 'waiting'
+              ? 'Location permission granted; waiting for a GPS fix…'
+              : gpsStatus === 'sending'
+                ? 'GPS captured; sending update to CMS and Admin…'
+                : gpsStatus === 'pending'
+                  ? 'GPS captured; Admin forwarding is pending.'
+                  : 'Live GPS is active; Admin tracking is up to date.'}
+        </div>
       ) : null}
 
       {/* Compact Log out — top-right, visible ~1 min after load/unlock */}
@@ -796,7 +842,9 @@ export function DisplayScreen() {
           onPointerDown={(e) => e.stopPropagation()}
         >
           <div className="display-pin-dialog w-full max-w-[280px] rounded-xl border border-[var(--cms-border)] bg-[var(--cms-bg-elevated)] p-4 shadow-lg">
-            <p className="text-center text-sm font-semibold">Enter OTP to log out</p>
+            <p className="text-center text-sm font-semibold">
+              Enter OTP to log out
+            </p>
             <p
               className="mt-3 flex justify-center gap-2 tracking-[0.35em] text-lg font-semibold"
               aria-live="polite"
@@ -807,20 +855,37 @@ export function DisplayScreen() {
                   className="inline-block h-2.5 w-2.5 rounded-full border border-white/40"
                   style={{
                     background:
-                      i < otpDigits.length ? 'var(--cms-accent)' : 'transparent',
+                      i < otpDigits.length
+                        ? 'var(--cms-accent)'
+                        : 'transparent',
                   }}
                 />
               ))}
             </p>
             {otpError ? (
-              <p className="mt-2 text-center text-xs text-[var(--cms-danger)]">{otpError}</p>
+              <p className="mt-2 text-center text-xs text-[var(--cms-danger)]">
+                {otpError}
+              </p>
             ) : (
               <p className="mt-2 text-center text-[10px] text-[var(--cms-muted)]">
                 Demo OTP 123456
               </p>
             )}
             <div className="display-pin-pad mt-3 grid grid-cols-3 gap-2">
-              {['1', '2', '3', '4', '5', '6', '7', '8', '9', '⌫', '0', 'OK'].map((key) => (
+              {[
+                '1',
+                '2',
+                '3',
+                '4',
+                '5',
+                '6',
+                '7',
+                '8',
+                '9',
+                '⌫',
+                '0',
+                'OK',
+              ].map((key) => (
                 <button
                   key={key}
                   type="button"

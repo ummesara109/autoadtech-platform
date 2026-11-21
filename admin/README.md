@@ -52,9 +52,15 @@ Phone GPS / Live Monitoring remains separate (`/api/cms/gps`, `/api/live`).
 
 ## CMS demo OTP (local development and protected Preview)
 
-For local testing, set `CMS_DEV_AUTH=true` in both `admin/.env` and `cms/api/.env`, then restart both servers. On Vercel, set `CMS_DEV_AUTH=true` for **Preview only** in both the Admin and CMS projects. A vehicle can then be provisioned without an operator phone and sign in with `123456`; it must still exist in the shared Supabase project and have its CMS operator and screen assignment. Production always rejects demo OTP, even if the variable is accidentally set.
+For local testing, set `CMS_DEV_AUTH=true` in both `admin/.env` and `cms/.env`, then restart both servers. To enable Production demo OTP, set `CMS_DEV_AUTH=true` in the Production environment variables of both Vercel projects and redeploy. The default allowlist is `KA01AB1234,KA02CD5678`; optionally set `CMS_DEMO_VEHICLES` in both projects to override it.
 
 Set `SUPABASE_URL` and either `SUPABASE_SERVICE_ROLE_KEY` or `SUPABASE_SECRET_KEY` server-side in both Vercel projects, pointing to the same Supabase project. Never expose the secret key through a `VITE_*` variable. Keep `ADMIN_GPS_URL` and `CMS_GPS_INGEST_KEY` configured for the existing CMS-to-Admin GPS forwarding, and apply the existing CMS vehicle/location and Admin GPS migrations to that project.
+
+Demo OTP is restricted to allowlisted vehicles that are registered in Supabase and have an active operator and assigned screen. Demo login does not require an actual phone and does not send SMS. It does not expose the Supabase service key or open internal queue/fleet endpoints. Configure `REDIS_URL` in the CMS Vercel project for shared OTP state and rate limiting. Keep `SUPABASE_URL` plus `SUPABASE_SECRET_KEY` (or `SUPABASE_SERVICE_ROLE_KEY`) server-side in both projects.
+
+For live SMS OTP, set `CMS_DEV_AUTH=false` in both projects. Enable **Authentication → Sign In / Providers → Phone**, configure an SMS provider and its server-side credentials, and confirm the provider can deliver to Indian `+91` mobile numbers. Do not configure Supabase test-phone OTPs in Production. Non-demo vehicles require a valid operator phone on the vehicle or its assigned partner; numbers are normalized to `+91` before Supabase Auth sends the code.
+
+After deploying this flow, re-save existing Admin vehicle records so their CMS vehicle/operator/screen rows and phone mapping are synchronized. If an assigned partner supplies the phone, updating that partner also refreshes the linked CMS vehicle. Remove any existing Supabase test-phone mappings for Production operator numbers.
 
 ## Connect real devices (live GPS)
 Legacy shared-key GPS for Live map markers (not Device Management auth):

@@ -19,6 +19,15 @@ const MOVE_MIN_INTERVAL_MS = 2_000;
 /** ~15 m — post immediately (subject to MOVE_MIN_INTERVAL_MS) so the map marker tracks. */
 const MOVE_METERS = 15;
 
+export type SilentGpsStatus =
+  | 'idle'
+  | 'requesting'
+  | 'waiting'
+  | 'sending'
+  | 'pending'
+  | 'active'
+  | 'error';
+
 function postIntervalMs(): number {
   const raw = Number(
     (import.meta as ImportMeta & { env: Record<string, string> }).env
@@ -83,12 +92,16 @@ let streamSeq = 0;
 let lastPostedLat: number | null = null;
 let lastPostedLng: number | null = null;
 let gpsError: string | null = null;
+let gpsStatus: SilentGpsStatus = 'idle';
 
-function setGpsError(message: string | null) {
+function setGpsStatus(status: SilentGpsStatus, message: string | null = null) {
+  gpsStatus = status;
   gpsError = message;
   if (typeof window !== 'undefined') {
     window.dispatchEvent(
-      new CustomEvent('niyoads:gps-status', { detail: { error: message } }),
+      new CustomEvent('niyoads:gps-status', {
+        detail: { status, error: message },
+      }),
     );
   }
 }
@@ -143,22 +156,26 @@ async function postFix(pos: GeolocationPosition, token: string) {
 
   pending = null;
   streamSeq += 1;
+  setGpsStatus('sending');
   try {
     // Prefer server-received ordering on Admin: send phone time but Nest also sets lastUpdated.
     const result = await api.postLocation(token, {
       lat,
       lng,
       accuracy:
-        typeof pos.coords.accuracy === 'number' ? pos.coords.accuracy : undefined,
+        typeof pos.coords.accuracy === 'number'
+          ? pos.coords.accuracy
+          : undefined,
       recordedAt: new Date().toISOString(),
       deviceId: deviceId(),
     });
     if (result.adminForwarded === false) {
-      setGpsError(
+      setGpsStatus(
+        'pending',
         'GPS reached CMS; forwarding to Admin is pending. CMS will retry automatically.',
       );
     } else {
-      setGpsError(null);
+      setGpsStatus('active');
     }
     lastPostAt = Date.now();
     lastPostedLat = lat;
@@ -169,7 +186,10 @@ async function postFix(pos: GeolocationPosition, token: string) {
       err instanceof ApiError
         ? `CMS GPS update failed (${err.status}): ${err.message}`
         : 'CMS GPS update failed because the network is unavailable';
-    setGpsError(`${detail}. Retrying when the connection is available.`);
+    setGpsStatus(
+      'error',
+      `${detail}. Retrying when the connection is available.`,
+    );
     scheduleFlush(token, MOVE_MIN_INTERVAL_MS);
   }
 }
@@ -202,14 +222,16 @@ function stopBrowserWatch() {
 function handleBrowserPositionError(error: GeolocationPositionError) {
   if (!running) return;
   if (error.code === error.PERMISSION_DENIED) {
-    setGpsError(
+    setGpsStatus(
+      'error',
       'Location permission was denied. Allow location access for this site in Android settings, then reopen CMS.',
     );
     stopBrowserWatch();
     running = false;
     return;
   }
-  setGpsError(
+  setGpsStatus(
+    'waiting',
     error.code === error.POSITION_UNAVAILABLE
       ? 'Phone location is unavailable. Check that Android location services are enabled.'
       : 'Phone location timed out. Waiting for a fresh GPS fix.',
@@ -269,16 +291,16 @@ export async function startSilentGps(accessToken?: string) {
     typeof window !== 'undefined' &&
     !window.isSecureContext
   ) {
-    setGpsError('Phone GPS requires CMS to be opened over HTTPS.');
+    setGpsStatus('error', 'Phone GPS requires CMS to be opened over HTTPS.');
     return;
   }
   if (!isNativeApp() && !('geolocation' in navigator)) {
-    setGpsError('This browser does not support phone location.');
+    setGpsStatus('error', 'This browser does not support phone location.');
     return;
   }
 
   running = true;
-  setGpsError(null);
+  setGpsStatus('requesting');
 
   const intervalMs = postIntervalMs();
   const bridge = nativeBridge();
@@ -291,6 +313,10 @@ export async function startSilentGps(accessToken?: string) {
       });
       if (isNativeApp()) {
         // Native FGS posts from Android — skip browser watch to avoid double ingest.
+        setGpsStatus(
+          'waiting',
+          'Location tracking started; waiting for a GPS fix.',
+        );
         return;
       }
     } catch {
@@ -331,10 +357,15 @@ export async function stopSilentGps(accessToken?: string) {
       /* ignore */
     }
   }
+  setGpsStatus('idle');
 }
 
 export function getSilentGpsError() {
   return gpsError;
+}
+
+export function getSilentGpsStatus() {
+  return gpsStatus;
 }
 
 export function isSilentGpsRunning() {

@@ -41,6 +41,7 @@ const DEV_DEMO_ADS = [
     externalAdId: "dev-demo-bbq"
   }
 ];
+const DEFAULT_CMS_DEMO_AUTONUMBERS = ["KA01AB1234", "KA02CD5678"];
 
 function hasSupabaseEnv() {
   return (
@@ -103,44 +104,80 @@ function supabaseRequiredError() {
 
 function normalizePhoneFields(raw, source) {
   const digits = String(raw || "").replace(/\D/g, "");
-  if (digits.length < 10) return null;
-  const last10 = digits.slice(-10);
+  let nationalNumber = "";
+  if (digits.length === 10) {
+    nationalNumber = digits;
+  } else if (digits.length === 11 && digits.startsWith("0")) {
+    nationalNumber = digits.slice(1);
+  } else if (digits.length === 12 && digits.startsWith("91")) {
+    nationalNumber = digits.slice(2);
+  }
+  if (!/^[6-9]\d{9}$/.test(nationalNumber)) return null;
+
   return {
-    registered_mobile: last10,
-    mobile_e164:
-      digits.startsWith("91") && digits.length >= 12
-        ? `+${digits}`
-        : `+91${last10}`,
+    registered_mobile: nationalNumber,
+    mobile_e164: `+91${nationalNumber}`,
     phoneSource: source
   };
 }
 
 function demoAuthEnabled() {
-  const vercelEnv = process.env.VERCEL_ENV;
-  const isProduction =
-    vercelEnv === "production" ||
-    (process.env.NODE_ENV === "production" && vercelEnv !== "preview");
-  return !isProduction && process.env.CMS_DEV_AUTH === "true";
+  return String(process.env.CMS_DEV_AUTH || "").trim().toLowerCase() === "true";
+}
+
+function isConfiguredDemoVehicle(autoNumber) {
+  const configured = process.env.CMS_DEMO_VEHICLES;
+  const allowed = (configured === undefined
+    ? DEFAULT_CMS_DEMO_AUTONUMBERS
+    : configured.split(",")
+  ).map(value => cmsGps.normalizeAutoNumber(value));
+  return (
+    demoAuthEnabled() &&
+    allowed.includes(cmsGps.normalizeAutoNumber(autoNumber))
+  );
 }
 
 function resolvePhone(db, vehicle) {
+  const autoNumber = cmsGps.normalizeAutoNumber(vehicle && vehicle.no);
   // Prefer phone on the Admin vehicle record (real operator mobile).
-  const fromVehicle = normalizePhoneFields(vehicle && vehicle.phone, "vehicle");
-  if (fromVehicle) return fromVehicle;
+  const rawVehiclePhone = String((vehicle && vehicle.phone) || "").trim();
+  const fromVehicle = normalizePhoneFields(rawVehiclePhone, "vehicle");
+  if (fromVehicle) {
+    return fromVehicle;
+  }
+  if (rawVehiclePhone) {
+    const e = new Error(
+      "Vehicle operator phone must be a valid Indian mobile number (10 digits, optionally prefixed with 0 or +91)."
+    );
+    e.code = 400;
+    throw e;
+  }
 
   const partners = (db && db.partners) || [];
   const partner = partners.find(
     p =>
       p &&
-      String(p.vehicle || "") === String(vehicle.no) &&
+      cmsGps.normalizeAutoNumber(p.vehicle) === autoNumber &&
+      !["inactive", "pending"].includes(
+        String(p.status || "Active").toLowerCase()
+      ) &&
       p.phone
   );
   const fromPartner = partner
     ? normalizePhoneFields(partner.phone, "partner")
     : null;
-  if (fromPartner) return fromPartner;
+  if (fromPartner) {
+    return fromPartner;
+  }
+  if (partner && !isConfiguredDemoVehicle(autoNumber)) {
+    const e = new Error(
+      "The assigned partner phone must be a valid Indian mobile number (10 digits, optionally prefixed with 0 or +91)."
+    );
+    e.code = 400;
+    throw e;
+  }
 
-  if (demoAuthEnabled()) {
+  if (isConfiguredDemoVehicle(autoNumber)) {
     return {
       registered_mobile: "0000000000",
       mobile_e164: "+910000000000",
@@ -605,12 +642,14 @@ async function provisionVehicleForCms(db, vehicle, opts = {}) {
   } catch (err) {
     if (err && err.cmsMigrationsRequired) throw err;
     if (isMissingTableError(err)) throw missingTablesError(err);
-    console.error(
-      "cms-provision failed:",
-      err && err.message ? err.message : String(err)
-    );
+    const errorName = err instanceof Error ? err.name : "UnknownError";
+    const errorCode =
+      err && /^[a-z0-9_-]{1,64}$/i.test(String(err.code || ""))
+        ? ` (${err.code})`
+        : "";
+    console.error(`cms-provision failed: ${errorName}${errorCode}`);
     const e = new Error(
-      `CMS provisioning failed: ${err && err.message ? err.message : String(err)}`
+      "CMS provisioning failed. Check Admin Supabase availability and CMS migrations."
     );
     e.code = err && err.code && Number(err.code) >= 400 ? err.code : 502;
     throw e;

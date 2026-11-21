@@ -2,14 +2,17 @@ import {
   BadRequestException,
   Inject,
   Injectable,
+  HttpException,
+  HttpStatus,
   Logger,
   NotFoundException,
   ServiceUnavailableException,
   UnauthorizedException,
+  ForbiddenException,
   forwardRef,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { maskMobile, normalizeAutoNumber } from '../common/mask-mobile';
 import { RedisService } from '../redis/redis.service';
 import { SupabaseService } from '../supabase/supabase.service';
@@ -20,6 +23,32 @@ import type { OtpChallenge, SessionPayload } from './auth.types';
 
 const CHALLENGE_TTL_SEC = 5 * 60;
 const SESSION_CACHE_TTL_SEC = 15 * 60;
+const DEFAULT_DEMO_AUTONUMBERS = ['KA01AB1234', 'KA02CD5678'];
+
+function normalizeIndianPhone(raw: string | undefined): {
+  nationalNumber: string;
+  mobileE164: string;
+} | null {
+  const digits = String(raw ?? '').replace(/\D/g, '');
+  let nationalNumber = '';
+  if (digits.length === 10) {
+    nationalNumber = digits;
+  } else if (digits.length === 11 && digits.startsWith('0')) {
+    nationalNumber = digits.slice(1);
+  } else if (digits.length === 12 && digits.startsWith('91')) {
+    nationalNumber = digits.slice(2);
+  }
+  if (!/^[6-9]\d{9}$/.test(nationalNumber)) return null;
+  return { nationalNumber, mobileE164: `+91${nationalNumber}` };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isNullableString(value: unknown): value is string | null | undefined {
+  return value === null || value === undefined || typeof value === 'string';
+}
 
 @Injectable()
 export class AuthService {
@@ -35,21 +64,101 @@ export class AuthService {
     private readonly location: LocationService,
   ) {}
 
-  get devAuthEnabled() {
+  private isProductionDeployment() {
     const vercelEnv = this.config.get<string>('VERCEL_ENV');
-    const isProduction =
+    return (
       vercelEnv === 'production' ||
       (this.config.get<string>('NODE_ENV') === 'production' &&
-        vercelEnv !== 'preview');
-    if (isProduction) return false;
+        vercelEnv !== 'preview')
+    );
+  }
 
+  get devAuthEnabled() {
+    if (this.isProductionDeployment()) return false;
+
+    const vercelEnv = this.config.get<string>('VERCEL_ENV');
     const explicitlyEnabled =
-      this.config.get<string>('CMS_DEV_AUTH') === 'true';
+      this.config.get<string>('CMS_DEV_AUTH')?.trim().toLowerCase() === 'true';
     if (vercelEnv === 'preview') return explicitlyEnabled;
     return explicitlyEnabled || !this.supabase.isConfigured;
   }
 
+  private explicitDemoAuthEnabled() {
+    return (
+      !this.isProductionDeployment() &&
+      this.config.get<string>('CMS_DEMO_AUTH')?.trim().toLowerCase() === 'true'
+    );
+  }
+
+  private isConfiguredDemoVehicle(autoNumber: string) {
+    const configured = this.config.get<string>('CMS_DEMO_VEHICLES');
+    const allowedAutoNumbers = (
+      configured === undefined
+        ? DEFAULT_DEMO_AUTONUMBERS
+        : configured.split(',')
+    )
+      .map((value) => normalizeAutoNumber(value.trim()))
+      .filter(Boolean);
+    return allowedAutoNumbers.includes(normalizeAutoNumber(autoNumber));
+  }
+
+  private demoAuthRequested() {
+    const cmsDevAuth =
+      this.config.get<string>('CMS_DEV_AUTH')?.trim().toLowerCase() === 'true';
+    if (this.isProductionDeployment()) return cmsDevAuth;
+    return (
+      cmsDevAuth ||
+      this.explicitDemoAuthEnabled() ||
+      !this.supabase.isConfigured
+    );
+  }
+
+  private demoOtpEnabledForVehicle(autoNumber: string) {
+    return this.demoAuthRequested() && this.isConfiguredDemoVehicle(autoNumber);
+  }
+
+  private async enforceOtpRateLimit(
+    key: string,
+    limit: number,
+    ttlSeconds: number,
+    message: string,
+  ) {
+    const count = await this.redis.incrementWithTtl(key, ttlSeconds);
+    if (count > limit) {
+      throw new HttpException(message, HttpStatus.TOO_MANY_REQUESTS);
+    }
+  }
+
+  private rateLimitKey(scope: string, value: string) {
+    const hash = createHash('sha256').update(value).digest('hex');
+    return `cms:auth:rate:${scope}:${hash}`;
+  }
+
+  private challengeOtpMode(challenge: OtpChallenge) {
+    return (
+      challenge.otpMode ??
+      (this.demoOtpEnabledForVehicle(challenge.autoNumber)
+        ? 'local_demo'
+        : 'sms')
+    );
+  }
+
+  private ensureSharedOtpStorage() {
+    const vercelEnv = this.config.get<string>('VERCEL_ENV');
+    const serverlessDeployment = Boolean(
+      this.config.get<string>('VERCEL') ||
+      vercelEnv === 'production' ||
+      vercelEnv === 'preview',
+    );
+    if (serverlessDeployment && this.redis.isAvailable !== true) {
+      throw new ServiceUnavailableException(
+        'Shared OTP storage is unavailable. Configure REDIS_URL for this Vercel environment and verify the Redis connection.',
+      );
+    }
+  }
+
   async lookupAutoNumber(autoNumberRaw: string) {
+    this.ensureSharedOtpStorage();
     const autoNumber = normalizeAutoNumber(autoNumberRaw);
     const vehicle = await this.findVehicle(autoNumber);
     if (!vehicle) {
@@ -65,20 +174,33 @@ export class AuthService {
     if (!operator || !operator.isActive) {
       throw new NotFoundException('No active operator for this vehicle');
     }
+    await this.requireSingleScreenForOperator(operator.id, vehicle.id);
 
-    const devMode = this.devAuthEnabled;
-    if (
-      !devMode &&
-      (!vehicle.registeredMobile || !vehicle.mobileE164)
-    ) {
-      throw new BadRequestException(
-        'A registered operator phone number is required for SMS OTP login',
+    const demoAuthRequested = this.demoAuthRequested();
+    const localDemo = this.demoOtpEnabledForVehicle(vehicle.autoNumber);
+    if (demoAuthRequested && !localDemo) {
+      throw new ForbiddenException(
+        'Demo OTP is restricted to the configured demo vehicles.',
       );
     }
+    const otpMode = localDemo ? 'local_demo' : 'sms';
+    const operatorPhone = normalizeIndianPhone(vehicle.mobileE164);
+    if (otpMode === 'sms' && !operatorPhone) {
+      throw new BadRequestException(
+        'No valid Indian operator phone is provisioned for this vehicle. Add it to the vehicle or its assigned partner in Admin.',
+      );
+    }
+    await this.enforceOtpRateLimit(
+      this.rateLimitKey('lookup', autoNumber),
+      5,
+      60,
+      'Too many OTP requests for this vehicle. Wait one minute and try again.',
+    );
 
-    const masked = devMode
+    const demoMode = otpMode !== 'sms';
+    const masked = demoMode
       ? 'Demo OTP'
-      : maskMobile(vehicle.registeredMobile ?? '');
+      : maskMobile(operatorPhone?.nationalNumber ?? '');
     const challengeId = randomUUID();
     const expiresAt = new Date(Date.now() + CHALLENGE_TTL_SEC * 1000);
 
@@ -88,7 +210,9 @@ export class AuthService {
       operatorId: operator.id,
       autoNumber: vehicle.autoNumber,
       maskedMobile: masked,
-      mobileE164: devMode ? undefined : vehicle.mobileE164,
+      mobileE164:
+        otpMode === 'local_demo' ? undefined : operatorPhone?.mobileE164,
+      otpMode,
       expiresAt: expiresAt.toISOString(),
       createdAt: new Date().toISOString(),
     };
@@ -101,17 +225,28 @@ export class AuthService {
 
     await this.startOtp(challenge);
 
-    if (this.supabase.isConfigured && !devMode) {
+    if (this.supabase.isConfigured && otpMode !== 'local_demo') {
       try {
-        await this.supabase.client.from('cms_otp_challenges').insert({
-          id: challengeId,
-          vehicle_id: vehicle.id,
-          masked_mobile: masked,
-          supabase_phone: vehicle.mobileE164,
-          expires_at: expiresAt.toISOString(),
-        });
+        const { error } = await this.supabase.client
+          .from('cms_otp_challenges')
+          .insert({
+            id: challengeId,
+            vehicle_id: vehicle.id,
+            masked_mobile: masked,
+            supabase_phone: vehicle.mobileE164,
+            expires_at: expiresAt.toISOString(),
+          });
+        if (error) {
+          const code = /^[a-z0-9_-]{1,64}$/i.test(String(error.code ?? ''))
+            ? ` (${error.code})`
+            : '';
+          this.logger.warn(`OTP challenge audit insert failed${code}`);
+        }
       } catch (err) {
-        this.logger.warn(`otp challenge audit insert skipped: ${String(err)}`);
+        const errorName = err instanceof Error ? err.name : 'UnknownError';
+        this.logger.warn(
+          `OTP challenge audit insert failed before response (${errorName})`,
+        );
       }
     }
 
@@ -121,11 +256,12 @@ export class AuthService {
       expiresAt: expiresAt.toISOString(),
       expiresInSec: CHALLENGE_TTL_SEC,
       autoNumber: vehicle.autoNumber,
-      devMode: this.devAuthEnabled,
+      devMode: demoMode,
     };
   }
 
   async resendOtp(challengeId: string) {
+    this.ensureSharedOtpStorage();
     const challenge = await this.getChallenge(challengeId);
     if (!challenge) {
       throw new BadRequestException('OTP challenge expired or invalid');
@@ -133,17 +269,24 @@ export class AuthService {
     if (new Date(challenge.expiresAt).getTime() < Date.now()) {
       throw new BadRequestException('OTP challenge expired');
     }
+    await this.enforceOtpRateLimit(
+      this.rateLimitKey('resend', challengeId),
+      3,
+      60,
+      'Too many resend requests. Wait one minute before trying again.',
+    );
     await this.startOtp(challenge);
     return {
       challengeId,
       maskedMobile: challenge.maskedMobile,
       expiresAt: challenge.expiresAt,
       message: 'OTP resent',
-      devMode: this.devAuthEnabled,
+      devMode: this.challengeOtpMode(challenge) !== 'sms',
     };
   }
 
   async verifyOtp(challengeId: string, otp: string): Promise<SessionPayload> {
+    this.ensureSharedOtpStorage();
     const challenge = await this.getChallenge(challengeId);
     if (!challenge) {
       throw new BadRequestException('OTP challenge expired or invalid');
@@ -152,13 +295,24 @@ export class AuthService {
       await this.redis.del(this.challengeKey(challengeId));
       throw new BadRequestException('OTP expired — request a new code');
     }
+    const verifyRateKey = this.rateLimitKey('verify', challengeId);
+    await this.enforceOtpRateLimit(
+      verifyRateKey,
+      5,
+      CHALLENGE_TTL_SEC,
+      'Too many verification attempts. Request a new OTP.',
+    );
 
     let accessToken: string;
     let refreshToken: string | undefined;
     let expiresIn: number | undefined;
     let authUserId: string | undefined;
 
-    if (this.devAuthEnabled) {
+    const otpMode = this.challengeOtpMode(challenge);
+    if (otpMode === 'local_demo') {
+      if (!this.demoOtpEnabledForVehicle(challenge.autoNumber)) {
+        throw new UnauthorizedException('Demo OTP is no longer enabled');
+      }
       if (otp !== DEV_OTP) {
         throw new UnauthorizedException('Invalid OTP');
       }
@@ -176,8 +330,17 @@ export class AuthService {
         token: otp,
         type: 'sms',
       });
-      if (error || !data.session) {
-        throw new UnauthorizedException(error?.message ?? 'Invalid OTP');
+      if (error) {
+        const detail = String(error.message ?? '').toLowerCase();
+        if (/invalid|expired|token|otp/.test(detail)) {
+          throw new UnauthorizedException('Invalid or expired OTP');
+        }
+        throw new ServiceUnavailableException(
+          this.supabaseOtpErrorMessage(error),
+        );
+      }
+      if (!data.session) {
+        throw new UnauthorizedException('Invalid or expired OTP');
       }
       accessToken = data.session.access_token;
       refreshToken = data.session.refresh_token;
@@ -186,7 +349,10 @@ export class AuthService {
 
       await this.supabase.client
         .from('cms_operators')
-        .update({ auth_user_id: authUserId, updated_at: new Date().toISOString() })
+        .update({
+          auth_user_id: authUserId,
+          updated_at: new Date().toISOString(),
+        })
         .eq('id', challenge.operatorId);
 
       await this.supabase.client
@@ -196,6 +362,7 @@ export class AuthService {
     }
 
     await this.redis.del(this.challengeKey(challengeId));
+    await this.redis.del(verifyRateKey);
 
     const operator = await this.findOperatorById(challenge.operatorId);
     const vehicle = await this.findVehicleById(challenge.vehicleId);
@@ -228,8 +395,8 @@ export class AuthService {
       expiresIn ?? SESSION_CACHE_TTL_SEC,
     );
 
-    // Local demo: seed PLAYING + QUEUED before display polls dashboard.
-    if (this.devAuthEnabled && screen?.id) {
+    // Seed demo ads before the display polls its dashboard.
+    if (otpMode === 'local_demo' && screen?.id) {
       try {
         await this.queue.ensureDevDemoAdsIfEmpty(screen.id);
       } catch (err) {
@@ -256,7 +423,7 @@ export class AuthService {
       }
     }
     await this.redis.del(this.sessionKey(accessToken));
-    if (!this.devAuthEnabled && this.supabase.isConfigured) {
+    if (!accessToken.startsWith('dev.') && this.supabase.isConfigured) {
       try {
         await this.supabase.client.auth.admin.signOut(accessToken);
       } catch {
@@ -272,7 +439,7 @@ export class AuthService {
       return JSON.parse(cached) as SessionPayload & { authUserId?: string };
     }
 
-    if (accessToken.startsWith('dev.') && this.devAuthEnabled) {
+    if (accessToken.startsWith('dev.')) {
       throw new UnauthorizedException('Session expired');
     }
 
@@ -280,7 +447,8 @@ export class AuthService {
       throw new UnauthorizedException('Not authenticated');
     }
 
-    const { data, error } = await this.supabase.client.auth.getUser(accessToken);
+    const { data, error } =
+      await this.supabase.client.auth.getUser(accessToken);
     if (error || !data.user) {
       throw new UnauthorizedException('Invalid session');
     }
@@ -328,9 +496,13 @@ export class AuthService {
   }
 
   private async startOtp(challenge: OtpChallenge) {
-    if (this.devAuthEnabled) {
+    const otpMode = this.challengeOtpMode(challenge);
+    if (otpMode === 'local_demo') {
+      if (!this.demoOtpEnabledForVehicle(challenge.autoNumber)) {
+        throw new UnauthorizedException('Demo OTP is not enabled');
+      }
       this.logger.log(
-        `DEV OTP for ${challenge.autoNumber} (${challenge.maskedMobile}): ${DEV_OTP}`,
+        `Demo OTP challenge created for ${challenge.autoNumber}`,
       );
       return;
     }
@@ -339,15 +511,80 @@ export class AuthService {
         'Registered operator phone number is missing for SMS OTP login',
       );
     }
-    const { error } = await this.supabase.client.auth.signInWithOtp({
-      phone: challenge.mobileE164,
-    });
-    if (error) {
-      this.logger.error(`Supabase OTP send failed: ${error.message}`);
-      throw new BadRequestException(
-        'Unable to send OTP — check Supabase Auth phone settings',
+    if (!this.supabase.isConfigured) {
+      throw new ServiceUnavailableException(
+        'Supabase Auth is not configured on the CMS server. Check SUPABASE_URL and the server-side service key.',
       );
     }
+
+    let response: Awaited<
+      ReturnType<typeof this.supabase.client.auth.signInWithOtp>
+    >;
+    try {
+      response = await this.supabase.client.auth.signInWithOtp({
+        phone: challenge.mobileE164,
+      });
+    } catch (error) {
+      const errorName = error instanceof Error ? error.name : 'UnknownError';
+      this.logger.error(
+        `Supabase OTP request failed before response (${errorName})`,
+      );
+      throw new ServiceUnavailableException(
+        'Unable to reach Supabase Auth. Check the CMS API network and Supabase project URL.',
+      );
+    }
+    const { error } = response;
+    if (error) {
+      const message = this.supabaseOtpErrorMessage(error);
+      this.logger.error(message);
+      throw new ServiceUnavailableException(message);
+    }
+  }
+
+  private supabaseOtpErrorMessage(error: {
+    code?: string;
+    status?: number;
+    message?: string;
+  }) {
+    const code = /^[a-z0-9_-]{1,64}$/i.test(String(error.code ?? ''))
+      ? String(error.code)
+      : '';
+    const providerError =
+      `${code} ${String(error.message ?? '')}`.toLowerCase();
+    let detail =
+      'Supabase Auth rejected SMS delivery. Check Authentication → Providers → Phone and the SMS provider logs.';
+
+    if (
+      /phone_provider_disabled|provider.*not configured|sms provider.*config/.test(
+        providerError,
+      )
+    ) {
+      detail =
+        'Configure and enable a Phone SMS provider in Supabase Authentication → Providers → Phone.';
+    } else if (
+      /rate.?limit|too many|over_sms_send_rate_limit/.test(providerError)
+    ) {
+      detail =
+        'Supabase or the SMS provider rate-limited this request. Wait before retrying and review the Auth rate limits.';
+    } else if (
+      /invalid.*phone|phone.*invalid|phone.*not valid|not a valid phone|unsupported.*country/.test(
+        providerError,
+      )
+    ) {
+      detail =
+        'The saved operator phone was rejected. Verify it is a valid +91 Indian mobile number and that the SMS provider supports India.';
+    } else if (/sms.*fail|send.*fail|delivery/.test(providerError)) {
+      detail =
+        'Supabase could not deliver the SMS. Check the SMS provider credentials, sender ID, and delivery logs.';
+    }
+
+    const status =
+      Number.isInteger(error.status) && Number(error.status) >= 400
+        ? ` (HTTP ${error.status}${code ? `, code ${code}` : ''})`
+        : code
+          ? ` (code ${code})`
+          : '';
+    return `Unable to send OTP. ${detail}${status}`;
   }
 
   private async getChallenge(id: string): Promise<OtpChallenge | null> {
@@ -366,27 +603,62 @@ export class AuthService {
 
   private async findVehicle(autoNumber: string) {
     if (this.supabase.isConfigured) {
-      const { data, error } = await this.supabase.client
+      const { data, error } = (await this.supabase.client
         .from('cms_vehicles')
-        .select('*')
+        .select(
+          'id, auto_number, registered_mobile, mobile_e164, status, display_name, make_model',
+        )
         .ilike('auto_number', autoNumber)
-        .maybeSingle();
+        .maybeSingle()) as {
+        data: unknown;
+        error: { code?: string } | null;
+      };
       if (error) {
-        this.logger.error(`CMS vehicle lookup failed: ${error.message}`);
+        const code = /^[a-z0-9_-]{1,64}$/i.test(String(error.code ?? ''))
+          ? ` (${error.code})`
+          : '';
+        this.logger.error(`CMS vehicle lookup failed${code}`);
         throw new ServiceUnavailableException(
           'CMS vehicle lookup is unavailable. Check the CMS Supabase credentials and migrations.',
         );
       }
       if (!data) return null;
+      if (
+        !isRecord(data) ||
+        typeof data.id !== 'string' ||
+        typeof data.auto_number !== 'string' ||
+        typeof data.status !== 'string' ||
+        typeof data.display_name !== 'string' ||
+        typeof data.make_model !== 'string' ||
+        !isNullableString(data.registered_mobile) ||
+        !isNullableString(data.mobile_e164)
+      ) {
+        throw new ServiceUnavailableException(
+          'The CMS vehicle record is incomplete. Check the vehicle schema and provisioning data.',
+        );
+      }
+      const phone = data.mobile_e164
+        ? normalizeIndianPhone(data.mobile_e164)
+        : normalizeIndianPhone(data.registered_mobile ?? undefined);
       return {
-        id: data.id as string,
-        autoNumber: data.auto_number as string,
-        registeredMobile: data.registered_mobile as string,
-        mobileE164: data.mobile_e164 as string,
-        status: data.status as string,
-        displayName: data.display_name as string,
-        makeModel: data.make_model as string,
+        id: data.id,
+        autoNumber: data.auto_number,
+        registeredMobile: phone?.nationalNumber ?? '',
+        mobileE164: phone?.mobileE164 ?? '',
+        status: data.status,
+        displayName: data.display_name,
+        makeModel: data.make_model,
       };
+    }
+    const vercelEnv = this.config.get<string>('VERCEL_ENV');
+    const isProduction =
+      vercelEnv === 'production' ||
+      (this.config.get<string>('NODE_ENV') === 'production' &&
+        vercelEnv !== 'preview');
+    if (isProduction) {
+      throw new ServiceUnavailableException(
+        'Production login requires the configured Supabase vehicle registry.',
+      );
     }
     const row = DEV_SEED.vehicles.find(
       (v) => normalizeAutoNumber(v.autoNumber) === autoNumber,

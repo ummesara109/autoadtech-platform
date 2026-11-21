@@ -31,9 +31,18 @@ export class QueueController {
 
   private assertInternal(key: string | undefined) {
     const expected = this.config.get<string>('CMS_INTERNAL_KEY');
-    // Dev: allow when unset and CMS_DEV_AUTH path (no production key)
+    const vercelEnv = this.config.get<string>('VERCEL_ENV');
+    const isProduction =
+      vercelEnv === 'production' ||
+      (this.config.get<string>('NODE_ENV') === 'production' &&
+        vercelEnv !== 'preview');
     if (!expected) {
-      if (this.config.get<string>('CMS_DEV_AUTH') === 'true') return;
+      if (
+        !isProduction &&
+        this.config.get<string>('CMS_DEV_AUTH')?.trim().toLowerCase() === 'true'
+      ) {
+        return;
+      }
       throw new UnauthorizedException('CMS_INTERNAL_KEY not configured');
     }
     if (!key || key !== expected) {

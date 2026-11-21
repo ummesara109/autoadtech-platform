@@ -52,7 +52,9 @@ export function OtpPage() {
     setError(null);
     setInfo(null);
     if (!navigator.onLine) {
-      setError('You’re offline. OTP verification is never cached and needs network.');
+      setError(
+        'You’re offline. OTP verification is never cached and needs network.',
+      );
       return;
     }
     if (secondsLeft <= 0) {
@@ -92,7 +94,7 @@ export function OtpPage() {
       setChallenge({ ...active, ...next });
       setInfo(
         next.devMode
-          ? 'Dev OTP resent — use 123456'
+          ? 'Demo OTP ready — use 123456'
           : `Code resent to ${next.maskedMobile}`,
       );
       setOtp('');
@@ -109,7 +111,9 @@ export function OtpPage() {
     <Shell narrow>
       <BrandMark />
       {!online ? (
-        <Alert tone="warn">Offline — OTP is never stored in the service worker cache.</Alert>
+        <Alert tone="warn">
+          Offline — OTP is never stored in the service worker cache.
+        </Alert>
       ) : null}
       <Panel className="mt-4 w-full">
         <Title
@@ -145,7 +149,7 @@ export function OtpPage() {
               {Math.floor(secondsLeft / 60)}:
               {String(secondsLeft % 60).padStart(2, '0')}
             </span>
-            {active.devMode ? ' · Dev OTP: 123456' : null}
+            {active.devMode ? ' · Demo OTP: 123456' : null}
           </p>
           {error ? <Alert>{error}</Alert> : null}
           {info ? <Alert tone="info">{info}</Alert> : null}

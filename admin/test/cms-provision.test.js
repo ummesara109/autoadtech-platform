@@ -6,6 +6,7 @@ const { resolvePhone } = require("../lib/cms-provision");
 
 const originalEnv = {
   CMS_DEV_AUTH: process.env.CMS_DEV_AUTH,
+  CMS_DEMO_VEHICLES: process.env.CMS_DEMO_VEHICLES,
   NODE_ENV: process.env.NODE_ENV,
   VERCEL_ENV: process.env.VERCEL_ENV
 };
@@ -19,6 +20,7 @@ afterEach(() => {
 
 test("Preview demo mode provisions a vehicle without a real phone", () => {
   process.env.CMS_DEV_AUTH = "true";
+  process.env.CMS_DEMO_VEHICLES = "KA01AB0001";
   process.env.NODE_ENV = "production";
   process.env.VERCEL_ENV = "preview";
 
@@ -29,8 +31,21 @@ test("Preview demo mode provisions a vehicle without a real phone", () => {
   });
 });
 
+test("Preview demo mode accepts uppercase CMS_DEV_AUTH values", () => {
+  process.env.CMS_DEV_AUTH = "TRUE";
+  process.env.CMS_DEMO_VEHICLES = "KA01AB0001";
+  process.env.NODE_ENV = "production";
+  process.env.VERCEL_ENV = "preview";
+
+  assert.equal(
+    resolvePhone({ partners: [] }, { no: "KA01AB0001" }).phoneSource,
+    "demo"
+  );
+});
+
 test("Local demo mode continues to allow provisioning without a real phone", () => {
   process.env.CMS_DEV_AUTH = "true";
+  process.env.CMS_DEMO_VEHICLES = "KA01AB0001";
   process.env.NODE_ENV = "development";
   delete process.env.VERCEL_ENV;
 
@@ -40,21 +55,37 @@ test("Local demo mode continues to allow provisioning without a real phone", () 
   );
 });
 
-test("Production rejects a missing phone even if demo auth is accidentally enabled", () => {
+test("Production demo auth provisions the two built-in demo vehicles without phones", () => {
   process.env.CMS_DEV_AUTH = "true";
   process.env.NODE_ENV = "production";
   process.env.VERCEL_ENV = "production";
 
-  assert.throws(
-    () => resolvePhone({ partners: [] }, { no: "KA01AB0001" }),
-    /A real operator phone number is required/
+  for (const no of ["KA01AB1234", "KA02CD5678"]) {
+    assert.equal(
+      resolvePhone({ partners: [] }, { no }).phoneSource,
+      "demo"
+    );
+  }
+});
+
+test("Production demo auth does not require an invalid assigned-partner phone", () => {
+  process.env.CMS_DEV_AUTH = "true";
+  process.env.NODE_ENV = "production";
+  process.env.VERCEL_ENV = "production";
+
+  assert.equal(
+    resolvePhone(
+      { partners: [{ vehicle: "KA01AB1234", phone: "not-a-phone" }] },
+      { no: "KA01AB1234" }
+    ).phoneSource,
+    "demo"
   );
 });
 
-test("Production Node deployments reject demo mode without Vercel metadata", () => {
+test("Production demo auth rejects vehicles outside the configured allowlist", () => {
   process.env.CMS_DEV_AUTH = "true";
   process.env.NODE_ENV = "production";
-  delete process.env.VERCEL_ENV;
+  process.env.VERCEL_ENV = "production";
 
   assert.throws(
     () => resolvePhone({ partners: [] }, { no: "KA01AB0001" }),
@@ -74,4 +105,34 @@ test("Demo provisioning still prefers a real vehicle or assigned partner phone",
 
   assert.equal(phone.phoneSource, "partner");
   assert.equal(phone.mobile_e164, "+919876543210");
+});
+
+test("Assigned partner matching ignores registration-number spacing and hyphens", () => {
+  process.env.CMS_DEV_AUTH = "false";
+  process.env.NODE_ENV = "production";
+  process.env.VERCEL_ENV = "production";
+
+  const phone = resolvePhone(
+    { partners: [{ vehicle: "KA-01 AB 0001", phone: "09876543210" }] },
+    { no: "KA01AB0001", phone: "" }
+  );
+
+  assert.equal(phone.registered_mobile, "9876543210");
+  assert.equal(phone.mobile_e164, "+919876543210");
+  assert.equal(phone.phoneSource, "partner");
+});
+
+test("Production rejects invalid Indian phone values instead of provisioning them", () => {
+  process.env.CMS_DEV_AUTH = "true";
+  process.env.NODE_ENV = "production";
+  process.env.VERCEL_ENV = "production";
+
+  assert.throws(
+    () =>
+      resolvePhone(
+        { partners: [] },
+        { no: "KA01AB0001", phone: "1234567890" }
+      ),
+    /valid Indian mobile number/
+  );
 });
