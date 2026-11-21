@@ -119,7 +119,7 @@ export function OtpPage() {
         <Title
           subtitle={
             active.devMode
-              ? `Enter demo OTP 123456 for ${active.autoNumber}.`
+              ? `Demo/testing mode: enter OTP 123456 for ${active.autoNumber}.`
               : `We sent a 6-digit code to ${active.maskedMobile} for ${active.autoNumber}.`
           }
         >

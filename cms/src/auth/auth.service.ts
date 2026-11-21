@@ -12,7 +12,7 @@ import {
   forwardRef,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { createHash, randomUUID } from 'crypto';
+import { createHash, createHmac, randomUUID, timingSafeEqual } from 'crypto';
 import { maskMobile, normalizeAutoNumber } from '../common/mask-mobile';
 import { RedisService } from '../redis/redis.service';
 import { SupabaseService } from '../supabase/supabase.service';
@@ -24,6 +24,18 @@ import type { OtpChallenge, SessionPayload } from './auth.types';
 const CHALLENGE_TTL_SEC = 5 * 60;
 const SESSION_CACHE_TTL_SEC = 15 * 60;
 const DEFAULT_DEMO_AUTONUMBERS = ['KA01AB1234', 'KA02CD5678'];
+const TEMP_DEMO_AUTONUMBER = 'KA01AB0000';
+const TEMP_DEMO_CHALLENGE_PREFIX = 'cms-demo-challenge';
+const TEMP_DEMO_SESSION_PREFIX = 'cms-demo-session';
+
+type TemporaryDemoClaims = {
+  jti: string;
+  vehicleId: string;
+  operatorId: string;
+  autoNumber: string;
+  screenId: string;
+  exp: number;
+};
 
 function normalizeIndianPhone(raw: string | undefined): {
   nationalNumber: string;
@@ -53,6 +65,10 @@ function isNullableString(value: unknown): value is string | null | undefined {
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
+  private readonly temporaryDemoRateLimits = new Map<
+    string,
+    { count: number; expiresAt: number }
+  >();
 
   constructor(
     private readonly supabase: SupabaseService,
@@ -83,13 +99,6 @@ export class AuthService {
     return explicitlyEnabled || !this.supabase.isConfigured;
   }
 
-  private explicitDemoAuthEnabled() {
-    return (
-      !this.isProductionDeployment() &&
-      this.config.get<string>('CMS_DEMO_AUTH')?.trim().toLowerCase() === 'true'
-    );
-  }
-
   private isConfiguredDemoVehicle(autoNumber: string) {
     const configured = this.config.get<string>('CMS_DEMO_VEHICLES');
     const allowedAutoNumbers = (
@@ -103,18 +112,136 @@ export class AuthService {
   }
 
   private demoAuthRequested() {
+    if (this.isProductionDeployment()) return false;
     const cmsDevAuth =
       this.config.get<string>('CMS_DEV_AUTH')?.trim().toLowerCase() === 'true';
-    if (this.isProductionDeployment()) return cmsDevAuth;
+    return cmsDevAuth || !this.supabase.isConfigured;
+  }
+
+  private temporaryDemoAuthEnabled(autoNumber: string) {
     return (
-      cmsDevAuth ||
-      this.explicitDemoAuthEnabled() ||
-      !this.supabase.isConfigured
+      this.config.get<string>('CMS_DEMO_AUTH')?.trim().toLowerCase() ===
+        'true' && normalizeAutoNumber(autoNumber) === TEMP_DEMO_AUTONUMBER
     );
   }
 
   private demoOtpEnabledForVehicle(autoNumber: string) {
+    if (this.isProductionDeployment()) {
+      return this.temporaryDemoAuthEnabled(autoNumber);
+    }
     return this.demoAuthRequested() && this.isConfiguredDemoVehicle(autoNumber);
+  }
+
+  private enforceTemporaryDemoRateLimit(
+    scope: string,
+    key: string,
+    limit: number,
+    ttlSeconds: number,
+    message: string,
+  ) {
+    const now = Date.now();
+    const id = this.rateLimitKey(scope, key);
+    const current = this.temporaryDemoRateLimits.get(id);
+    if (!current || current.expiresAt <= now) {
+      this.temporaryDemoRateLimits.set(id, {
+        count: 1,
+        expiresAt: now + ttlSeconds * 1000,
+      });
+    } else {
+      if (current.count >= limit) {
+        throw new HttpException(message, HttpStatus.TOO_MANY_REQUESTS);
+      }
+      current.count += 1;
+    }
+
+    if (this.temporaryDemoRateLimits.size > 1_000) {
+      for (const [rateKey, value] of this.temporaryDemoRateLimits) {
+        if (value.expiresAt <= now)
+          this.temporaryDemoRateLimits.delete(rateKey);
+      }
+    }
+  }
+
+  private temporaryDemoSigningKey() {
+    const supabaseKey =
+      this.config.get<string>('SUPABASE_SERVICE_ROLE_KEY')?.trim() ||
+      this.config.get<string>('SUPABASE_SECRET_KEY')?.trim();
+    if (!this.supabase.isConfigured || !supabaseKey) {
+      throw new ServiceUnavailableException(
+        'Demo OTP requires the configured Supabase vehicle registry and server-side key.',
+      );
+    }
+    return createHash('sha256')
+      .update(`niyo-cms-temporary-demo-v1\0${supabaseKey}`)
+      .digest();
+  }
+
+  private signTemporaryDemoToken(prefix: string, claims: TemporaryDemoClaims) {
+    const payload = Buffer.from(JSON.stringify(claims)).toString('base64url');
+    const signingInput = `${prefix}.${payload}`;
+    const signature = createHmac('sha256', this.temporaryDemoSigningKey())
+      .update(signingInput)
+      .digest('base64url');
+    return `${signingInput}.${signature}`;
+  }
+
+  private verifyTemporaryDemoToken(
+    token: string,
+    prefix: string,
+  ): TemporaryDemoClaims {
+    const [tokenPrefix, encodedPayload, encodedSignature, ...extra] =
+      token.split('.');
+    if (
+      tokenPrefix !== prefix ||
+      !encodedPayload ||
+      !encodedSignature ||
+      extra.length
+    ) {
+      throw new UnauthorizedException('Invalid or expired demo session');
+    }
+
+    const signingInput = `${tokenPrefix}.${encodedPayload}`;
+    const expected = createHmac('sha256', this.temporaryDemoSigningKey())
+      .update(signingInput)
+      .digest();
+    const actual = Buffer.from(encodedSignature, 'base64url');
+    if (
+      actual.length !== expected.length ||
+      !timingSafeEqual(actual, expected)
+    ) {
+      throw new UnauthorizedException('Invalid or expired demo session');
+    }
+
+    let payload: unknown;
+    try {
+      payload = JSON.parse(
+        Buffer.from(encodedPayload, 'base64url').toString('utf8'),
+      ) as unknown;
+    } catch {
+      throw new UnauthorizedException('Invalid or expired demo session');
+    }
+    if (
+      !isRecord(payload) ||
+      typeof payload.jti !== 'string' ||
+      typeof payload.vehicleId !== 'string' ||
+      typeof payload.operatorId !== 'string' ||
+      typeof payload.autoNumber !== 'string' ||
+      typeof payload.screenId !== 'string' ||
+      typeof payload.exp !== 'number' ||
+      !Number.isInteger(payload.exp) ||
+      payload.exp <= Math.floor(Date.now() / 1000) ||
+      !this.temporaryDemoAuthEnabled(payload.autoNumber)
+    ) {
+      throw new UnauthorizedException('Invalid or expired demo session');
+    }
+    return {
+      jti: payload.jti,
+      vehicleId: payload.vehicleId,
+      operatorId: payload.operatorId,
+      autoNumber: payload.autoNumber,
+      screenId: payload.screenId,
+      exp: payload.exp,
+    };
   }
 
   private async enforceOtpRateLimit(
@@ -158,8 +285,25 @@ export class AuthService {
   }
 
   async lookupAutoNumber(autoNumberRaw: string) {
-    this.ensureSharedOtpStorage();
     const autoNumber = normalizeAutoNumber(autoNumberRaw);
+    const temporaryDemo = this.temporaryDemoAuthEnabled(autoNumber);
+    if (temporaryDemo) {
+      this.enforceTemporaryDemoRateLimit(
+        'demo-lookup',
+        autoNumber,
+        5,
+        60,
+        'Too many demo OTP requests. Wait one minute and try again.',
+      );
+      if (!this.supabase.isConfigured) {
+        throw new ServiceUnavailableException(
+          'Demo OTP requires the configured Supabase vehicle registry and server-side key.',
+        );
+      }
+    } else {
+      this.ensureSharedOtpStorage();
+    }
+
     const vehicle = await this.findVehicle(autoNumber);
     if (!vehicle) {
       throw new NotFoundException(
@@ -174,7 +318,36 @@ export class AuthService {
     if (!operator || !operator.isActive) {
       throw new NotFoundException('No active operator for this vehicle');
     }
-    await this.requireSingleScreenForOperator(operator.id, vehicle.id);
+    const screen = await this.requireSingleScreenForOperator(
+      operator.id,
+      vehicle.id,
+    );
+
+    if (temporaryDemo) {
+      const expiresAt = new Date(Date.now() + CHALLENGE_TTL_SEC * 1000);
+      const challengeId = this.signTemporaryDemoToken(
+        TEMP_DEMO_CHALLENGE_PREFIX,
+        {
+          jti: randomUUID(),
+          vehicleId: vehicle.id,
+          operatorId: operator.id,
+          autoNumber: vehicle.autoNumber,
+          screenId: screen.id,
+          exp: Math.floor(expiresAt.getTime() / 1000),
+        },
+      );
+      this.logger.log(
+        `Temporary demo OTP challenge created for ${vehicle.autoNumber}`,
+      );
+      return {
+        challengeId,
+        maskedMobile: 'Demo OTP',
+        expiresAt: expiresAt.toISOString(),
+        expiresInSec: CHALLENGE_TTL_SEC,
+        autoNumber: vehicle.autoNumber,
+        devMode: true,
+      };
+    }
 
     const demoAuthRequested = this.demoAuthRequested();
     const localDemo = this.demoOtpEnabledForVehicle(vehicle.autoNumber);
@@ -261,6 +434,27 @@ export class AuthService {
   }
 
   async resendOtp(challengeId: string) {
+    if (challengeId.startsWith(`${TEMP_DEMO_CHALLENGE_PREFIX}.`)) {
+      const claims = this.verifyTemporaryDemoToken(
+        challengeId,
+        TEMP_DEMO_CHALLENGE_PREFIX,
+      );
+      this.enforceTemporaryDemoRateLimit(
+        'demo-resend',
+        claims.jti,
+        3,
+        60,
+        'Too many demo OTP resend requests. Wait one minute and try again.',
+      );
+      return {
+        challengeId,
+        maskedMobile: 'Demo OTP',
+        expiresAt: new Date(claims.exp * 1000).toISOString(),
+        message: 'Demo OTP ready',
+        devMode: true,
+      };
+    }
+
     this.ensureSharedOtpStorage();
     const challenge = await this.getChallenge(challengeId);
     if (!challenge) {
@@ -286,6 +480,10 @@ export class AuthService {
   }
 
   async verifyOtp(challengeId: string, otp: string): Promise<SessionPayload> {
+    if (challengeId.startsWith(`${TEMP_DEMO_CHALLENGE_PREFIX}.`)) {
+      return this.verifyTemporaryDemoOtp(challengeId, otp);
+    }
+
     this.ensureSharedOtpStorage();
     const challenge = await this.getChallenge(challengeId);
     if (!challenge) {
@@ -409,8 +607,109 @@ export class AuthService {
     return session;
   }
 
+  private async verifyTemporaryDemoOtp(
+    challengeId: string,
+    otp: string,
+  ): Promise<SessionPayload> {
+    const challenge = this.verifyTemporaryDemoToken(
+      challengeId,
+      TEMP_DEMO_CHALLENGE_PREFIX,
+    );
+    this.enforceTemporaryDemoRateLimit(
+      'demo-verify',
+      challenge.jti,
+      5,
+      CHALLENGE_TTL_SEC,
+      'Too many demo verification attempts. Request a new OTP.',
+    );
+    if (otp !== DEV_OTP) {
+      throw new UnauthorizedException('Invalid OTP');
+    }
+
+    const expiresIn = SESSION_CACHE_TTL_SEC;
+    const sessionClaims: TemporaryDemoClaims = {
+      ...challenge,
+      jti: randomUUID(),
+      exp: Math.floor(Date.now() / 1000) + expiresIn,
+    };
+    const accessToken = this.signTemporaryDemoToken(
+      TEMP_DEMO_SESSION_PREFIX,
+      sessionClaims,
+    );
+    return this.temporaryDemoSession(sessionClaims, accessToken, expiresIn);
+  }
+
+  private async resolveTemporaryDemoSession(
+    accessToken: string,
+  ): Promise<SessionPayload> {
+    const claims = this.verifyTemporaryDemoToken(
+      accessToken,
+      TEMP_DEMO_SESSION_PREFIX,
+    );
+    return this.temporaryDemoSession(
+      claims,
+      accessToken,
+      Math.max(1, claims.exp - Math.floor(Date.now() / 1000)),
+    );
+  }
+
+  private async temporaryDemoSession(
+    claims: TemporaryDemoClaims,
+    accessToken: string,
+    expiresIn: number,
+  ): Promise<SessionPayload> {
+    if (!this.supabase.isConfigured) {
+      throw new UnauthorizedException('Demo vehicle registry is unavailable');
+    }
+    const vehicle = await this.findVehicle(claims.autoNumber);
+    if (
+      !vehicle ||
+      vehicle.id !== claims.vehicleId ||
+      vehicle.status !== 'active' ||
+      normalizeAutoNumber(vehicle.autoNumber) !== TEMP_DEMO_AUTONUMBER
+    ) {
+      throw new UnauthorizedException('Demo vehicle is no longer active');
+    }
+
+    const operator = await this.findOperatorByVehicle(vehicle.id);
+    if (!operator || !operator.isActive || operator.id !== claims.operatorId) {
+      throw new UnauthorizedException('Demo operator is no longer active');
+    }
+
+    const screen = await this.requireSingleScreenForOperator(
+      operator.id,
+      vehicle.id,
+    );
+    if (screen.id !== claims.screenId) {
+      throw new UnauthorizedException('Demo screen assignment has changed');
+    }
+
+    return {
+      accessToken,
+      expiresIn,
+      operator: {
+        id: operator.id,
+        displayName: operator.displayName,
+        roleCode: operator.roleCode,
+        vehicleId: vehicle.id,
+        autoNumber: vehicle.autoNumber,
+      },
+      screen,
+      screens: [screen],
+    };
+  }
+
   async logout(accessToken: string | undefined) {
     if (!accessToken) return { ok: true };
+    if (accessToken.startsWith(`${TEMP_DEMO_SESSION_PREFIX}.`)) {
+      try {
+        const session = await this.resolveTemporaryDemoSession(accessToken);
+        await this.location.stopForSession(session);
+      } catch (error) {
+        if (!(error instanceof UnauthorizedException)) throw error;
+      }
+      return { ok: true };
+    }
     const cached = await this.redis.get(this.sessionKey(accessToken));
     if (cached) {
       try {
@@ -434,6 +733,10 @@ export class AuthService {
   }
 
   async resolveSession(accessToken: string) {
+    if (accessToken.startsWith(`${TEMP_DEMO_SESSION_PREFIX}.`)) {
+      return this.resolveTemporaryDemoSession(accessToken);
+    }
+
     const cached = await this.redis.get(this.sessionKey(accessToken));
     if (cached) {
       return JSON.parse(cached) as SessionPayload & { authUserId?: string };
@@ -501,9 +804,7 @@ export class AuthService {
       if (!this.demoOtpEnabledForVehicle(challenge.autoNumber)) {
         throw new UnauthorizedException('Demo OTP is not enabled');
       }
-      this.logger.log(
-        `Demo OTP challenge created for ${challenge.autoNumber}`,
-      );
+      this.logger.log(`Demo OTP challenge created for ${challenge.autoNumber}`);
       return;
     }
     if (!challenge.mobileE164) {

@@ -50,13 +50,13 @@ Phone GPS / Live Monitoring remains separate (`/api/cms/gps`, `/api/live`).
 - E2E (controlled local sim): `./scripts/test-dm.sh`
 - Device auth: `POST /api/dm/device/auth` → `POST /api/dm/device/heartbeat`
 
-## CMS demo OTP (local development and protected Preview)
+## CMS demo OTP (local development and temporary Production testing)
 
-For local testing, set `CMS_DEV_AUTH=true` in both `admin/.env` and `cms/.env`, then restart both servers. To enable Production demo OTP, set `CMS_DEV_AUTH=true` in the Production environment variables of both Vercel projects and redeploy. The default allowlist is `KA01AB1234,KA02CD5678`; optionally set `CMS_DEMO_VEHICLES` in both projects to override it.
+For local seeded testing, set `CMS_DEV_AUTH=true` in both `admin/.env` and `cms/.env`, then restart both servers. For temporary Production testing of only `KA01AB0000`, set `CMS_DEMO_AUTH=true` and `CMS_DEV_AUTH=false` in both Vercel projects and redeploy.
 
 Set `SUPABASE_URL` and either `SUPABASE_SERVICE_ROLE_KEY` or `SUPABASE_SECRET_KEY` server-side in both Vercel projects, pointing to the same Supabase project. Never expose the secret key through a `VITE_*` variable. Keep `ADMIN_GPS_URL` and `CMS_GPS_INGEST_KEY` configured for the existing CMS-to-Admin GPS forwarding, and apply the existing CMS vehicle/location and Admin GPS migrations to that project.
 
-Demo OTP is restricted to allowlisted vehicles that are registered in Supabase and have an active operator and assigned screen. Demo login does not require an actual phone and does not send SMS. It does not expose the Supabase service key or open internal queue/fleet endpoints. Configure `REDIS_URL` in the CMS Vercel project for shared OTP state and rate limiting. Keep `SUPABASE_URL` plus `SUPABASE_SECRET_KEY` (or `SUPABASE_SERVICE_ROLE_KEY`) server-side in both projects.
+The CMS backend verifies the fixed testing OTP only after looking up `KA01AB0000` in Supabase and confirming its active operator and screen assignment. The signed CMS session is short-lived; no Supabase Auth token or SMS is used. This isolated demo login does not require `REDIS_URL`; live SMS OTP continues to use shared Redis. To disable the temporary mode, set `CMS_DEMO_AUTH=false` in both projects and redeploy. Keep `SUPABASE_URL` plus `SUPABASE_SECRET_KEY` (or `SUPABASE_SERVICE_ROLE_KEY`) server-side in both projects.
 
 For live SMS OTP, set `CMS_DEV_AUTH=false` in both projects. Enable **Authentication → Sign In / Providers → Phone**, configure an SMS provider and its server-side credentials, and confirm the provider can deliver to Indian `+91` mobile numbers. Do not configure Supabase test-phone OTPs in Production. Non-demo vehicles require a valid operator phone on the vehicle or its assigned partner; numbers are normalized to `+91` before Supabase Auth sends the code.
 

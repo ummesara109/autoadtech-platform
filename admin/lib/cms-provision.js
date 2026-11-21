@@ -125,7 +125,15 @@ function demoAuthEnabled() {
   return String(process.env.CMS_DEV_AUTH || "").trim().toLowerCase() === "true";
 }
 
+function temporaryDemoAuthEnabled(autoNumber) {
+  return (
+    String(process.env.CMS_DEMO_AUTH || "").trim().toLowerCase() === "true" &&
+    cmsGps.normalizeAutoNumber(autoNumber) === "KA01AB0000"
+  );
+}
+
 function isConfiguredDemoVehicle(autoNumber) {
+  if (temporaryDemoAuthEnabled(autoNumber)) return true;
   const configured = process.env.CMS_DEMO_VEHICLES;
   const allowed = (configured === undefined
     ? DEFAULT_CMS_DEMO_AUTONUMBERS

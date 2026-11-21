@@ -6,6 +6,7 @@ const { resolvePhone } = require("../lib/cms-provision");
 
 const originalEnv = {
   CMS_DEV_AUTH: process.env.CMS_DEV_AUTH,
+  CMS_DEMO_AUTH: process.env.CMS_DEMO_AUTH,
   CMS_DEMO_VEHICLES: process.env.CMS_DEMO_VEHICLES,
   NODE_ENV: process.env.NODE_ENV,
   VERCEL_ENV: process.env.VERCEL_ENV
@@ -66,6 +67,35 @@ test("Production demo auth provisions the two built-in demo vehicles without pho
       "demo"
     );
   }
+});
+
+test("temporary Production demo mode provisions only KA01AB0000 without a phone", () => {
+  process.env.CMS_DEV_AUTH = "false";
+  process.env.CMS_DEMO_AUTH = "true";
+  process.env.NODE_ENV = "production";
+  process.env.VERCEL_ENV = "production";
+
+  assert.equal(
+    resolvePhone({ partners: [] }, { no: "KA01 AB 0000" }).phoneSource,
+    "demo"
+  );
+  assert.throws(
+    () => resolvePhone({ partners: [] }, { no: "KA01AB0001" }),
+    /A real operator phone number is required/
+  );
+});
+
+test("turning off temporary demo mode restores phone requirement", () => {
+  process.env.CMS_DEV_AUTH = "false";
+  process.env.CMS_DEMO_AUTH = "false";
+  process.env.CMS_DEMO_VEHICLES = "";
+  process.env.NODE_ENV = "production";
+  process.env.VERCEL_ENV = "production";
+
+  assert.throws(
+    () => resolvePhone({ partners: [] }, { no: "KA01AB0000" }),
+    /A real operator phone number is required/
+  );
 });
 
 test("Production demo auth does not require an invalid assigned-partner phone", () => {

@@ -1,7 +1,8 @@
-import { IsString, Length } from 'class-validator';
+import { IsString, MaxLength, MinLength } from 'class-validator';
 
 export class ResendOtpDto {
   @IsString()
-  @Length(36, 64)
+  @MinLength(36)
+  @MaxLength(1024)
   challengeId!: string;
 }

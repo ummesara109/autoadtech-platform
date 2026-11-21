@@ -1,8 +1,9 @@
-import { IsString, Length, Matches } from 'class-validator';
+import { IsString, MaxLength, Matches, MinLength } from 'class-validator';
 
 export class VerifyOtpDto {
   @IsString()
-  @Length(36, 64)
+  @MinLength(36)
+  @MaxLength(1024)
   challengeId!: string;
 
   @IsString()

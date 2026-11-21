@@ -13,11 +13,14 @@ jest.mock('../supabase/supabase.service', () => ({
 }));
 
 import type { ConfigService } from '@nestjs/config';
+import { validate } from 'class-validator';
 import type { LocationService } from '../location/location.service';
 import type { QueueService } from '../queue/queue.service';
 import type { RedisService } from '../redis/redis.service';
 import type { SupabaseService } from '../supabase/supabase.service';
 import { AuthService } from './auth.service';
+import { ResendOtpDto } from './dto/resend-otp.dto';
+import { VerifyOtpDto } from './dto/verify-otp.dto';
 import type { SessionPayload } from './auth.types';
 
 type TestRow = Record<string, unknown>;
@@ -216,10 +219,7 @@ describe('AuthService demo OTP vehicle flow', () => {
   it('rejects a registered demo vehicle without an active assigned screen', async () => {
     const tables = registeredVehicleRows();
     tables.cms_screen_assignments = [];
-    const { auth, signInWithOtp } = createAuthHarness(
-      previewSettings,
-      tables,
-    );
+    const { auth, signInWithOtp } = createAuthHarness(previewSettings, tables);
 
     await expect(auth.lookupAutoNumber('KA01AB0001')).rejects.toThrow(
       'No screen assigned to this Auto Number',
@@ -227,43 +227,156 @@ describe('AuthService demo OTP vehicle flow', () => {
     expect(signInWithOtp).not.toHaveBeenCalled();
   });
 
-  it('allows Production demo OTP for the two registered demo vehicles without phones', async () => {
+  it('supports the temporary Production demo flow without Redis or Supabase SMS', async () => {
     const tables = registeredVehicleRows();
-    tables.cms_vehicles[0].auto_number = 'KA01AB1234';
-    tables.cms_vehicles[1].auto_number = 'KA02CD5678';
-    const { auth, verifyOtp, signInWithOtp, from, queue } = createAuthHarness(
+    tables.cms_vehicles[0].auto_number = 'KA01AB0000';
+    const { auth, verifyOtp, signInWithOtp, from, redis } = createAuthHarness(
       {
-        CMS_DEV_AUTH: 'true',
+        CMS_DEMO_AUTH: 'true',
         NODE_ENV: 'production',
         VERCEL_ENV: 'production',
+        SUPABASE_SERVICE_ROLE_KEY: 'test-server-key',
+      },
+      tables,
+    );
+    redis.isAvailable = false;
+
+    const lookup = await auth.lookupAutoNumber('KA01 AB 0000');
+    expect(lookup.devMode).toBe(true);
+    expect(lookup.autoNumber).toBe('KA01AB0000');
+    expect(lookup.maskedMobile).toBe('Demo OTP');
+    const verifyDto = Object.assign(new VerifyOtpDto(), {
+      challengeId: lookup.challengeId,
+      otp: '123456',
+    });
+    const resendDto = Object.assign(new ResendOtpDto(), {
+      challengeId: lookup.challengeId,
+    });
+    expect(await validate(verifyDto)).toHaveLength(0);
+    expect(await validate(resendDto)).toHaveLength(0);
+    const resend = await auth.resendOtp(lookup.challengeId);
+    expect(resend.devMode).toBe(true);
+    expect(resend.message).toBe('Demo OTP ready');
+    expect(signInWithOtp).not.toHaveBeenCalled();
+    expect(redis.set).not.toHaveBeenCalled();
+    expect(redis.incrementWithTtl).not.toHaveBeenCalled();
+
+    await expect(auth.verifyOtp(lookup.challengeId, '000000')).rejects.toThrow(
+      'Invalid OTP',
+    );
+
+    const session = await auth.verifyOtp(lookup.challengeId, '123456');
+    expect(session.accessToken).toMatch(/^cms-demo-session\./);
+    expect(session.operator.vehicleId).toBe('vehicle-1');
+    expect(session.operator.autoNumber).toBe('KA01AB0000');
+    expect(session.screen.id).toBe('screen-1');
+    const tamperedToken = `${session.accessToken.slice(0, -1)}${
+      session.accessToken.endsWith('A') ? 'B' : 'A'
+    }`;
+    await expect(auth.resolveSession(tamperedToken)).rejects.toThrow(
+      'Invalid or expired demo session',
+    );
+    expect(signInWithOtp).not.toHaveBeenCalled();
+    expect(verifyOtp).not.toHaveBeenCalled();
+    expect(from).not.toHaveBeenCalledWith('cms_otp_challenges');
+    expect(redis.get).not.toHaveBeenCalled();
+    expect(redis.set).not.toHaveBeenCalled();
+
+    const resolved = await auth.resolveSession(session.accessToken);
+    expect(resolved.operator.autoNumber).toBe('KA01AB0000');
+    expect(resolved.screen.id).toBe('screen-1');
+    expect(redis.get).not.toHaveBeenCalled();
+  });
+
+  it('disables temporary demo sessions when CMS_DEMO_AUTH is turned off', async () => {
+    const settings = {
+      CMS_DEMO_AUTH: 'true',
+      NODE_ENV: 'production',
+      VERCEL_ENV: 'production',
+      SUPABASE_SERVICE_ROLE_KEY: 'test-server-key',
+    };
+    const tables = registeredVehicleRows();
+    tables.cms_vehicles[0].auto_number = 'KA01AB0000';
+    const { auth } = createAuthHarness(settings, tables);
+    const lookup = await auth.lookupAutoNumber('KA01AB0000');
+    const session = await auth.verifyOtp(lookup.challengeId, '123456');
+
+    settings.CMS_DEMO_AUTH = 'false';
+    await expect(auth.resolveSession(session.accessToken)).rejects.toThrow(
+      'Invalid or expired demo session',
+    );
+  });
+
+  it('rate limits temporary demo lookups without Redis', async () => {
+    const tables = registeredVehicleRows();
+    tables.cms_vehicles[0].auto_number = 'KA01AB0000';
+    const { auth, redis } = createAuthHarness(
+      {
+        CMS_DEMO_AUTH: 'true',
+        NODE_ENV: 'production',
+        VERCEL_ENV: 'production',
+        SUPABASE_SERVICE_ROLE_KEY: 'test-server-key',
+      },
+      tables,
+    );
+    redis.isAvailable = false;
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await auth.lookupAutoNumber('KA01AB0000');
+    }
+
+    await expect(auth.lookupAutoNumber('KA01AB0000')).rejects.toThrow(
+      'Too many demo OTP requests.',
+    );
+    expect(redis.incrementWithTtl).not.toHaveBeenCalled();
+  });
+
+  it('requires the registered Supabase demo vehicle and rejects other vehicles from demo OTP', async () => {
+    const tables = registeredVehicleRows();
+    tables.cms_vehicles[0].auto_number = 'KA01AB0000';
+    tables.cms_vehicles[1].registered_mobile = '9999999999';
+    tables.cms_vehicles[1].mobile_e164 = '+919999999999';
+    const { auth, signInWithOtp, redis } = createAuthHarness(
+      {
+        CMS_DEMO_AUTH: 'true',
+        NODE_ENV: 'production',
+        VERCEL_ENV: 'production',
+        SUPABASE_SECRET_KEY: 'test-server-key',
       },
       tables,
     );
 
-    for (const [autoNumber, vehicleId, screenId] of [
-      ['KA01AB1234', 'vehicle-1', 'screen-1'],
-      ['KA02CD5678', 'vehicle-2', 'screen-2'],
-    ]) {
-      const lookup = await auth.lookupAutoNumber(autoNumber);
-      expect(lookup.devMode).toBe(true);
-      expect(lookup.maskedMobile).toBe('Demo OTP');
+    await expect(auth.lookupAutoNumber('KA99ZZ9999')).rejects.toThrow(
+      'No registered vehicle found for this Auto Number',
+    );
 
-      const session = await auth.verifyOtp(lookup.challengeId, '123456');
-      expect(session.operator.vehicleId).toBe(vehicleId);
-      expect(session.operator.autoNumber).toBe(autoNumber);
-      expect(session.screen.id).toBe(screenId);
-    }
-
-    expect(signInWithOtp).not.toHaveBeenCalled();
-    expect(verifyOtp).not.toHaveBeenCalled();
-    expect(from).not.toHaveBeenCalledWith('cms_otp_challenges');
-    expect(queue.ensureDevDemoAdsIfEmpty).toHaveBeenCalledTimes(2);
+    const otherVehicle = await auth.lookupAutoNumber('KA02CD0002');
+    expect(otherVehicle.devMode).toBe(false);
+    expect(signInWithOtp).toHaveBeenCalledWith({ phone: '+919999999999' });
+    expect(redis.set).toHaveBeenCalled();
   });
 
-  it('blocks registered non-demo vehicles when Production demo mode is enabled', async () => {
+  it('does not use Redis or development seeds when the demo plate is unregistered', async () => {
+    const { auth, redis, signInWithOtp } = createAuthHarness(
+      {
+        CMS_DEMO_AUTH: 'true',
+        NODE_ENV: 'production',
+        VERCEL_ENV: 'production',
+        SUPABASE_SERVICE_ROLE_KEY: 'test-server-key',
+      },
+      registeredVehicleRows(),
+    );
+    redis.isAvailable = false;
+
+    await expect(auth.lookupAutoNumber('KA01AB0000')).rejects.toThrow(
+      'No registered vehicle found for this Auto Number',
+    );
+    expect(redis.incrementWithTtl).not.toHaveBeenCalled();
+    expect(signInWithOtp).not.toHaveBeenCalled();
+  });
+
+  it('does not enable Production demo OTP from CMS_DEV_AUTH alone', async () => {
     const tables = registeredVehicleRows();
-    tables.cms_vehicles[0].registered_mobile = '9876543210';
-    tables.cms_vehicles[0].mobile_e164 = '+919876543210';
     const { auth, signInWithOtp } = createAuthHarness(
       {
         CMS_DEV_AUTH: 'true',
@@ -274,7 +387,7 @@ describe('AuthService demo OTP vehicle flow', () => {
     );
 
     await expect(auth.lookupAutoNumber('KA01AB0001')).rejects.toThrow(
-      'Demo OTP is restricted to the configured demo vehicles.',
+      'No valid Indian operator phone is provisioned',
     );
     expect(signInWithOtp).not.toHaveBeenCalled();
   });

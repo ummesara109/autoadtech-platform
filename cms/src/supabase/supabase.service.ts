@@ -11,10 +11,10 @@ export class SupabaseService implements OnModuleInit {
   constructor(private readonly config: ConfigService) {}
 
   onModuleInit() {
-    const url = this.config.get<string>('SUPABASE_URL');
+    const url = this.config.get<string>('SUPABASE_URL')?.trim();
     const key =
-      this.config.get<string>('SUPABASE_SERVICE_ROLE_KEY') ??
-      this.config.get<string>('SUPABASE_SECRET_KEY');
+      this.config.get<string>('SUPABASE_SERVICE_ROLE_KEY')?.trim() ||
+      this.config.get<string>('SUPABASE_SECRET_KEY')?.trim();
 
     if (!url || !key || url.includes('YOUR_PROJECT')) {
       this.logger.warn(

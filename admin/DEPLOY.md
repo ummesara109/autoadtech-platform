@@ -21,8 +21,9 @@ In **Settings → Environment Variables** (Production):
 - optional: `AUTH_SECRET`, `DEVICE_KEY`
 - **`CMS_GPS_INGEST_KEY`** — shared secret for CMS Nest → `POST /api/cms/gps` (server-to-server only; never put in `public/`)
 - optional: `CMS_GPS_ONLINE_MS` (stale/online threshold, default 90000)
-- To enable Production Demo OTP, set `CMS_DEV_AUTH=true` in both Admin and CMS Vercel projects and redeploy. The default allowlist is `KA01AB1234,KA02CD5678`; optionally override it with the same `CMS_DEMO_VEHICLES` value in both projects. CMS still validates the vehicle and active operator/screen assignment in Supabase; demo mode does not require a phone or send SMS.
-- Configure `REDIS_URL` in the CMS Vercel project for shared OTP challenges and rate limits. Keep `SUPABASE_URL` and `SUPABASE_SECRET_KEY` (or `SUPABASE_SERVICE_ROLE_KEY`) server-side in both projects.
+- For temporary demo testing of only `KA01AB0000`, set `CMS_DEMO_AUTH=true` and `CMS_DEV_AUTH=false` in both Admin and CMS Vercel Production environments, then redeploy. CMS verifies the vehicle, active operator, and screen assignment from Supabase; this path does not need an operator phone, SMS, or Redis.
+- Set `CMS_DEMO_AUTH=false` in both projects and redeploy to disable temporary demo login. Keep `SUPABASE_URL` and `SUPABASE_SECRET_KEY` (or `SUPABASE_SERVICE_ROLE_KEY`) server-side in both projects.
+- Configure `REDIS_URL` in the CMS Vercel project for the separate live SMS OTP challenge and rate-limit flow.
 - For live SMS OTP instead, set `CMS_DEV_AUTH=false` in both projects, enable Supabase Phone Auth, configure an SMS provider that supports Indian `+91` numbers, and provision a valid operator phone on each non-demo vehicle or its assigned partner.
 - optional: `DISABLE_LIVE_SIM=true` / never set `ALLOW_LIVE_SIM` in production (no dummy map movement)
 
