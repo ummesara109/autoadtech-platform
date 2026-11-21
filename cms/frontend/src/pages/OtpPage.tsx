@@ -113,7 +113,11 @@ export function OtpPage() {
       ) : null}
       <Panel className="mt-4 w-full">
         <Title
-          subtitle={`We sent a 6-digit code to ${active.maskedMobile} for ${active.autoNumber}.`}
+          subtitle={
+            active.devMode
+              ? `Enter demo OTP 123456 for ${active.autoNumber}.`
+              : `We sent a 6-digit code to ${active.maskedMobile} for ${active.autoNumber}.`
+          }
         >
           Enter OTP
         </Title>

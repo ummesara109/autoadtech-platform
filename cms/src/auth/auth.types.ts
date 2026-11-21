@@ -11,7 +11,7 @@ export type OtpChallenge = {
   operatorId: string;
   autoNumber: string;
   maskedMobile: string;
-  mobileE164: string;
+  mobileE164?: string;
   expiresAt: string;
   createdAt: string;
 };

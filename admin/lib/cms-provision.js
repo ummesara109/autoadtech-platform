@@ -115,6 +115,14 @@ function normalizePhoneFields(raw, source) {
   };
 }
 
+function demoAuthEnabled() {
+  const vercelEnv = process.env.VERCEL_ENV;
+  const isProduction =
+    vercelEnv === "production" ||
+    (process.env.NODE_ENV === "production" && vercelEnv !== "preview");
+  return !isProduction && process.env.CMS_DEV_AUTH === "true";
+}
+
 function resolvePhone(db, vehicle) {
   // Prefer phone on the Admin vehicle record (real operator mobile).
   const fromVehicle = normalizePhoneFields(vehicle && vehicle.phone, "vehicle");
@@ -132,7 +140,7 @@ function resolvePhone(db, vehicle) {
     : null;
   if (fromPartner) return fromPartner;
 
-  if (process.env.CMS_DEV_AUTH === "true") {
+  if (demoAuthEnabled()) {
     return {
       registered_mobile: "0000000000",
       mobile_e164: "+910000000000",
@@ -611,6 +619,7 @@ async function provisionVehicleForCms(db, vehicle, opts = {}) {
 
 module.exports = {
   provisionVehicleForCms,
+  resolvePhone,
   CMS_MIGRATIONS_HINT,
   uuidFromKey,
   isMissingTableError

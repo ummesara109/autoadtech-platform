@@ -50,11 +50,11 @@ Phone GPS / Live Monitoring remains separate (`/api/cms/gps`, `/api/live`).
 - E2E (controlled local sim): `./scripts/test-dm.sh`
 - Device auth: `POST /api/dm/device/auth` → `POST /api/dm/device/heartbeat`
 
-## CMS demo OTP (local development)
+## CMS demo OTP (local development and protected Preview)
 
-To provision a vehicle without a real operator phone during local testing, set `CMS_DEV_AUTH=true` in both `admin/.env` and `cms/api/.env`, then restart both servers. Admin uses a non-routable placeholder phone only in this mode, and CMS accepts the demo OTP `123456` without sending SMS. Do not enable this mode in production.
+For local testing, set `CMS_DEV_AUTH=true` in both `admin/.env` and `cms/api/.env`, then restart both servers. On Vercel, set `CMS_DEV_AUTH=true` for **Preview only** in both the Admin and CMS projects. A vehicle can then be provisioned without an operator phone and sign in with `123456`; it must still exist in the shared Supabase project and have its CMS operator and screen assignment. Production always rejects demo OTP, even if the variable is accidentally set.
 
-For an Admin-created vehicle to be recognized by CMS and appear in Live Monitoring, `cms/api/.env` must use the same `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` as `admin/.env`. Keep `ADMIN_GPS_URL=http://127.0.0.1:3000` and the same `CMS_GPS_INGEST_KEY` in both backend env files. Apply the CMS vehicle/location and Admin GPS migrations to that project.
+Set `SUPABASE_URL` and either `SUPABASE_SERVICE_ROLE_KEY` or `SUPABASE_SECRET_KEY` server-side in both Vercel projects, pointing to the same Supabase project. Never expose the secret key through a `VITE_*` variable. Keep `ADMIN_GPS_URL` and `CMS_GPS_INGEST_KEY` configured for the existing CMS-to-Admin GPS forwarding, and apply the existing CMS vehicle/location and Admin GPS migrations to that project.
 
 ## Connect real devices (live GPS)
 Legacy shared-key GPS for Live map markers (not Device Management auth):

@@ -43,10 +43,10 @@ export class AuthService {
         vercelEnv !== 'preview');
     if (isProduction) return false;
 
-    return (
-      this.config.get<string>('CMS_DEV_AUTH') === 'true' ||
-      !this.supabase.isConfigured
-    );
+    const explicitlyEnabled =
+      this.config.get<string>('CMS_DEV_AUTH') === 'true';
+    if (vercelEnv === 'preview') return explicitlyEnabled;
+    return explicitlyEnabled || !this.supabase.isConfigured;
   }
 
   async lookupAutoNumber(autoNumberRaw: string) {
@@ -66,7 +66,19 @@ export class AuthService {
       throw new NotFoundException('No active operator for this vehicle');
     }
 
-    const masked = maskMobile(vehicle.registeredMobile);
+    const devMode = this.devAuthEnabled;
+    if (
+      !devMode &&
+      (!vehicle.registeredMobile || !vehicle.mobileE164)
+    ) {
+      throw new BadRequestException(
+        'A registered operator phone number is required for SMS OTP login',
+      );
+    }
+
+    const masked = devMode
+      ? 'Demo OTP'
+      : maskMobile(vehicle.registeredMobile ?? '');
     const challengeId = randomUUID();
     const expiresAt = new Date(Date.now() + CHALLENGE_TTL_SEC * 1000);
 
@@ -76,7 +88,7 @@ export class AuthService {
       operatorId: operator.id,
       autoNumber: vehicle.autoNumber,
       maskedMobile: masked,
-      mobileE164: vehicle.mobileE164,
+      mobileE164: devMode ? undefined : vehicle.mobileE164,
       expiresAt: expiresAt.toISOString(),
       createdAt: new Date().toISOString(),
     };
@@ -89,7 +101,7 @@ export class AuthService {
 
     await this.startOtp(challenge);
 
-    if (this.supabase.isConfigured) {
+    if (this.supabase.isConfigured && !devMode) {
       try {
         await this.supabase.client.from('cms_otp_challenges').insert({
           id: challengeId,
@@ -154,6 +166,11 @@ export class AuthService {
       expiresIn = 60 * 60;
       authUserId = `dev-user-${challenge.operatorId}`;
     } else {
+      if (!challenge.mobileE164) {
+        throw new BadRequestException(
+          'Registered operator phone number is missing for SMS OTP login',
+        );
+      }
       const { data, error } = await this.supabase.client.auth.verifyOtp({
         phone: challenge.mobileE164,
         token: otp,
@@ -316,6 +333,11 @@ export class AuthService {
         `DEV OTP for ${challenge.autoNumber} (${challenge.maskedMobile}): ${DEV_OTP}`,
       );
       return;
+    }
+    if (!challenge.mobileE164) {
+      throw new BadRequestException(
+        'Registered operator phone number is missing for SMS OTP login',
+      );
     }
     const { error } = await this.supabase.client.auth.signInWithOtp({
       phone: challenge.mobileE164,

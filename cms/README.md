@@ -73,12 +73,13 @@ Set `CORS_ORIGIN` to the allowed browser origins when the API is called cross-or
 
 For local seeded login, set `CMS_DEV_AUTH=true`; the local OTP is `123456`. A
 protected Vercel Preview can also use this mode to test registered vehicles without
-SMS: set `CMS_DEV_AUTH=true` for Preview and configure the same Supabase project
-credentials used by Admin. The demo OTP applies only after the vehicle, active
-operator, and screen assignment are found in Supabase. Vercel Production and
-production Node deployments always disable demo authentication. To use Supabase
-SMS OTP, configure Phone Auth and an SMS provider, then set `CMS_DEV_AUTH=false`.
-The Supabase service-role/secret key must remain server-side.
+SMS: set `CMS_DEV_AUTH=true` for Preview in both CMS and Admin Vercel projects and
+configure the same Supabase project credentials in both. The demo OTP does not
+require an operator phone, but the registered vehicle, active operator, and screen
+assignment must exist in Supabase. Vercel Production and production Node deployments
+always disable demo authentication, even if the variable is accidentally set. To
+use Supabase SMS OTP, configure Phone Auth and an SMS provider, then set
+`CMS_DEV_AUTH=false`. The Supabase service-role/secret key must remain server-side.
 
 ## Production build and run
 
