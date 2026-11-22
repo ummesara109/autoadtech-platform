@@ -5,6 +5,17 @@ type BeforeInstallPromptEvent = Event & {
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
 };
 
+let deferredInstallPrompt: BeforeInstallPromptEvent | null = null;
+const promptListeners = new Set<() => void>();
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeinstallprompt', (event) => {
+    event.preventDefault();
+    deferredInstallPrompt = event as BeforeInstallPromptEvent;
+    promptListeners.forEach((listener) => listener());
+  });
+}
+
 function isStandaloneDisplay(): boolean {
   if (typeof window === 'undefined') return true;
   const mq = window.matchMedia?.('(display-mode: standalone)').matches;
@@ -30,9 +41,8 @@ function isIosSafari(): boolean {
  * Safe on Login — never used on the kiosk Display surface.
  */
 export function usePwaInstall() {
-  const [deferred, setDeferred] = useState<BeforeInstallPromptEvent | null>(
-    null,
-  );
+  const [deferred, setDeferred] =
+    useState<BeforeInstallPromptEvent | null>(deferredInstallPrompt);
   const [installed, setInstalled] = useState(isStandaloneDisplay);
   const [iosHint, setIosHint] = useState(false);
 
@@ -40,19 +50,17 @@ export function usePwaInstall() {
     setInstalled(isStandaloneDisplay());
     setIosHint(!isStandaloneDisplay() && isIosSafari());
 
-    const onBip = (e: Event) => {
-      e.preventDefault();
-      setDeferred(e as BeforeInstallPromptEvent);
-    };
+    const onPromptAvailable = () => setDeferred(deferredInstallPrompt);
     const onInstalled = () => {
       setInstalled(true);
+      deferredInstallPrompt = null;
       setDeferred(null);
       setIosHint(false);
     };
-    window.addEventListener('beforeinstallprompt', onBip);
+    promptListeners.add(onPromptAvailable);
     window.addEventListener('appinstalled', onInstalled);
     return () => {
-      window.removeEventListener('beforeinstallprompt', onBip);
+      promptListeners.delete(onPromptAvailable);
       window.removeEventListener('appinstalled', onInstalled);
     };
   }, []);
@@ -61,6 +69,7 @@ export function usePwaInstall() {
     if (!deferred) return false;
     await deferred.prompt();
     const choice = await deferred.userChoice;
+    if (deferredInstallPrompt === deferred) deferredInstallPrompt = null;
     setDeferred(null);
     return choice.outcome === 'accepted';
   }, [deferred]);
