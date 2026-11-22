@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Button } from './ui';
 import { usePwaInstall } from '../hooks/usePwaInstall';
 
@@ -7,8 +8,17 @@ import { usePwaInstall } from '../hooks/usePwaInstall';
  */
 export function PwaInstallHint() {
   const { canPrompt, showIosHint, installed, promptInstall } = usePwaInstall();
+  const [showManualSteps, setShowManualSteps] = useState(false);
 
   if (installed) return null;
+
+  function onInstallClick() {
+    if (canPrompt) {
+      void promptInstall();
+      return;
+    }
+    setShowManualSteps(true);
+  }
 
   return (
     <div
@@ -16,40 +26,32 @@ export function PwaInstallHint() {
       role="region"
       aria-label="Install Auto Display"
     >
-      {canPrompt ? (
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <p className="min-w-0">
-            Install <strong className="text-[var(--cms-ink)]">Auto Display</strong> for
-            fullscreen vehicle use.
-          </p>
-          <Button
-            type="button"
-            className="shrink-0"
-            onClick={() => {
-              void promptInstall();
-            }}
-          >
-            Install app
-          </Button>
-        </div>
-      ) : (
-        <p>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <p className="min-w-0">
+          Install <strong className="text-[var(--cms-ink)]">Auto Display</strong> for
+          fullscreen vehicle use.
+        </p>
+        <Button type="button" className="shrink-0" onClick={onInstallClick}>
+          Install app
+        </Button>
+      </div>
+      {!canPrompt && showManualSteps ? (
+        <p className="mt-2" role="status">
           {showIosHint ? (
             <>
-              On iPhone/iPad: tap{' '}
-              <strong className="text-[var(--cms-ink)]">Share</strong> →{' '}
+              In Safari, tap <strong className="text-[var(--cms-ink)]">Share</strong> →{' '}
               <strong className="text-[var(--cms-ink)]">Add to Home Screen</strong>.
             </>
           ) : (
             <>
-              Open your browser menu and choose{' '}
-              <strong className="text-[var(--cms-ink)]">Install app</strong> or{' '}
+              This browser hasn’t offered an in-page install prompt. Open its menu and
+              choose <strong className="text-[var(--cms-ink)]">Install app</strong> or{' '}
               <strong className="text-[var(--cms-ink)]">Add to Home Screen</strong>.
             </>
           )}{' '}
           The site must use HTTPS.
         </p>
-      )}
+      ) : null}
     </div>
   );
 }
