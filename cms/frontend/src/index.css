@@ -168,20 +168,6 @@ a {
   pointer-events: none;
 }
 
-.display-pin-overlay {
-  pointer-events: auto;
-  touch-action: manipulation;
-}
-
-.display-pin-key {
-  cursor: pointer;
-  min-height: 2.75rem;
-}
-
-.display-pin-key:active {
-  background: rgba(61, 214, 140, 0.22);
-}
-
 .display-media {
   pointer-events: none;
   -webkit-user-drag: none;

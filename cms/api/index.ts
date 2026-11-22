@@ -14,10 +14,15 @@ async function createApplication(): Promise<NestExpressApplication> {
     new ExpressAdapter(),
   );
 
+  const corsOrigins = process.env.CORS_ORIGIN?.split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
   app.enableCors({
-    origin:
-      process.env.CORS_ORIGIN?.split(',').map((origin) => origin.trim()) ??
-      true,
+    origin: corsOrigins?.length
+      ? corsOrigins
+      : process.env.NODE_ENV === 'production'
+        ? false
+        : true,
     credentials: true,
   });
   app.setGlobalPrefix('api');

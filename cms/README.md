@@ -69,17 +69,20 @@ under `api-legacy/` so Vercel does not treat its source files as separate functi
 
 Set the CMS server environment variables in the Vercel project settings. Keep
 `VITE_API_URL` empty for the browser PWA so it uses same-origin `/api` requests.
-Set `CORS_ORIGIN` to the allowed browser origins when the API is called cross-origin.
+Production CORS is same-origin by default; set `CORS_ORIGIN` to a comma-separated
+allowlist only when the API must be called cross-origin.
 
 For local seeded login, set `CMS_DEV_AUTH=true`; the existing local OTP is `123456`.
 For temporary Production testing of only `KA01AB0000`, set `CMS_DEMO_AUTH=true` in
 both the CMS and Admin Vercel projects. The vehicle must still exist in the
 configured Supabase registry and have an active operator and assigned screen. This
-mode verifies `123456` on the CMS backend, sends no SMS, and uses a signed,
-short-lived CMS application session. It does not create a Supabase Auth token or
-require Redis. Disable it after testing with `CMS_DEMO_AUTH=false` and redeploy.
-Keep `CMS_DEV_AUTH=false` in Production; it does not enable this temporary mode.
-The Supabase service-role/secret key must remain server-side.
+mode verifies the test OTP on the CMS backend, sends no SMS, and uses a signed,
+short-lived session in an HttpOnly cookie. The cookie is not returned to browser
+JavaScript, and the test OTP is not displayed in the UI. It does not create a
+Supabase Auth token or require Redis. Disable it after testing with
+`CMS_DEMO_AUTH=false` and redeploy. Keep `CMS_DEV_AUTH=false` in Production; it
+does not enable this temporary mode. The Supabase service-role/secret key must
+remain server-side.
 
 ## Production build and run
 
@@ -168,9 +171,11 @@ Never commit `.env` or expose Supabase/Admin secrets through a `VITE_*` variable
 For temporary Production demo OTP, set `CMS_DEMO_AUTH=true` and `CMS_DEV_AUTH=false`
 in the **Production** environment of both Vercel projects. The Admin backend uses
 the flag to allow phone-less provisioning of only `KA01AB0000`; the CMS backend
-reads it at runtime through Nest `ConfigModule`. Redeploy both projects after
-changing environment variables. After testing, set `CMS_DEMO_AUTH=false` and
-redeploy to disable this login path.
+reads it at runtime through Nest `ConfigModule`. The authenticated session is a
+signed, short-lived HttpOnly cookie scoped to `/api`; use the same-origin Vercel
+API route so the browser sends it with CMS requests. Redeploy both projects
+after changing environment variables. After testing, set `CMS_DEMO_AUTH=false`
+and redeploy to disable this login path before real drivers use the app.
 Provide `SUPABASE_URL` and either `SUPABASE_SERVICE_ROLE_KEY` or
 `SUPABASE_SECRET_KEY` server-side in both projects, pointing to the same project.
 The CMS project needs a reachable shared `REDIS_URL` for live SMS OTP and its

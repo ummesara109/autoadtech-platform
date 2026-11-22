@@ -2,7 +2,11 @@ import { useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { BrandMark, Button, StatusPill } from './ui';
 import { useOnline } from '../hooks/useOnline';
-import { clearSession, loadSession } from '../lib/session';
+import {
+  clearSession,
+  hasSessionCredential,
+  loadSession,
+} from '../lib/session';
 import { api } from '../lib/api';
 import { stopSilentGps } from '../lib/silentGps';
 
@@ -19,7 +23,7 @@ export function AppChrome({ children, title }: Props) {
 
   async function logout() {
     const token = session?.accessToken;
-    if (token) {
+    if (hasSessionCredential(session)) {
       void stopSilentGps(token);
       try {
         await api.logout(token);

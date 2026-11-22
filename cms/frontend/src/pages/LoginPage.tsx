@@ -76,8 +76,9 @@ export function LoginPage() {
         </form>
         <p className="mt-6 text-xs text-[var(--cms-muted)]">
           Local dev seed: <code>KA01AB1234</code> or <code>KA02CD5678</code>.
-          Temporary Production demo testing: <code>KA01AB0000</code>; its OTP is
-          shown only when enabled by the CMS server.
+          Temporary Production testing is limited to <code>KA01AB0000</code>;
+          disable CMS_DEMO_AUTH in Vercel and redeploy before live drivers use
+          the app.
         </p>
       </Panel>
       <PwaInstallHint />

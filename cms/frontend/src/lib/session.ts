@@ -17,6 +17,14 @@ export function loadSession(): SessionResponse | null {
   }
 }
 
+export function hasSessionCredential(
+  session: SessionResponse | null | undefined,
+): session is SessionResponse {
+  return Boolean(
+    session && (session.accessToken || session.sessionMode === 'demo-cookie'),
+  );
+}
+
 export function saveSession(session: SessionResponse) {
   localStorage.setItem(KEY, JSON.stringify(session));
 }

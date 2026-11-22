@@ -15,8 +15,15 @@ async function bootstrap() {
     new FastifyAdapter({ logger: true }),
   );
 
+  const corsOrigins = process.env.CORS_ORIGIN?.split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
   app.enableCors({
-    origin: process.env.CORS_ORIGIN?.split(',').map((s) => s.trim()) ?? true,
+    origin: corsOrigins?.length
+      ? corsOrigins
+      : process.env.NODE_ENV === 'production'
+        ? false
+        : true,
     credentials: true,
   });
 

@@ -24,6 +24,7 @@ async function request<T>(
   const { token, headers, ...rest } = options;
   const res = await fetch(endpointUrl(path), {
     ...rest,
+    credentials: rest.credentials ?? 'include',
     headers: {
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -71,7 +72,8 @@ export type Screen = {
 };
 
 export type SessionResponse = {
-  accessToken: string;
+  accessToken?: string;
+  sessionMode?: 'demo-cookie';
   refreshToken?: string;
   expiresIn?: number;
   operator: {
@@ -168,20 +170,20 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ challengeId }),
     }),
-  logout: (token: string) =>
+  logout: (token?: string) =>
     request<{ ok: boolean }>('/api/auth/logout', {
       method: 'POST',
       token,
     }),
   /** Session-bound display feed — no client screenId. */
-  dashboard: (token: string) =>
+  dashboard: (token?: string) =>
     request<DashboardResponse>('/api/dashboard', { token }),
 
   /**
    * Display player: mark current PLAYING complete and promote next.
    * Screen is bound to the session on the API — do not send screenId.
    */
-  playerComplete: (token: string, queueItemId: string) =>
+  playerComplete: (token: string | undefined, queueItemId: string) =>
     request<{
       completedId?: string;
       playing?: DashboardResponse['currentlyPlaying'];
@@ -195,7 +197,7 @@ export const api = {
     }),
 
   /** Display player: fail broken/missing creative and advance. */
-  playerFail: (token: string, queueItemId: string, reason?: string) =>
+  playerFail: (token: string | undefined, queueItemId: string, reason?: string) =>
     request<{
       failedId?: string;
       playing?: DashboardResponse['currentlyPlaying'];
@@ -210,7 +212,7 @@ export const api = {
 
   /** Silent GPS ingest — session vehicle only; no CMS UI. */
   postLocation: (
-    token: string,
+    token: string | undefined,
     body: {
       lat: number;
       lng: number;
@@ -234,7 +236,7 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-  stopLocation: (token: string) =>
+  stopLocation: (token?: string) =>
     request<{ trackingActive?: boolean; ok?: boolean }>('/api/location/stop', {
       method: 'POST',
       token,

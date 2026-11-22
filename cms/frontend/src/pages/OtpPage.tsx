@@ -94,7 +94,7 @@ export function OtpPage() {
       setChallenge({ ...active, ...next });
       setInfo(
         next.devMode
-          ? 'Demo OTP ready — use 123456'
+          ? 'Temporary demo mode is enabled. No SMS was sent.'
           : `Code resent to ${next.maskedMobile}`,
       );
       setOtp('');
@@ -119,7 +119,7 @@ export function OtpPage() {
         <Title
           subtitle={
             active.devMode
-              ? `Demo/testing mode: enter OTP 123456 for ${active.autoNumber}.`
+              ? `Temporary testing mode is enabled for ${active.autoNumber}. Enter the test OTP provided to you.`
               : `We sent a 6-digit code to ${active.maskedMobile} for ${active.autoNumber}.`
           }
         >
@@ -149,8 +149,16 @@ export function OtpPage() {
               {Math.floor(secondsLeft / 60)}:
               {String(secondsLeft % 60).padStart(2, '0')}
             </span>
-            {active.devMode ? ' · Demo OTP: 123456' : null}
+            {active.devMode
+              ? ' · Testing only — disable CMS_DEMO_AUTH before real drivers use this app.'
+              : null}
           </p>
+          {active.devMode ? (
+            <Alert tone="warn">
+              Testing-only authentication is enabled. Disable CMS_DEMO_AUTH in
+              Vercel and redeploy before real drivers use this app.
+            </Alert>
+          ) : null}
           {error ? <Alert>{error}</Alert> : null}
           {info ? <Alert tone="info">{info}</Alert> : null}
           <Button

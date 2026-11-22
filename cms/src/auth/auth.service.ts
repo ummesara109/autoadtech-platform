@@ -19,6 +19,7 @@ import { SupabaseService } from '../supabase/supabase.service';
 import { QueueService } from '../queue/queue.service';
 import { LocationService } from '../location/location.service';
 import { DEV_OTP, DEV_SEED } from './dev-seed';
+import { CMS_DEMO_SESSION_PREFIX } from './auth.constants';
 import type { OtpChallenge, SessionPayload } from './auth.types';
 
 const CHALLENGE_TTL_SEC = 5 * 60;
@@ -26,7 +27,6 @@ const SESSION_CACHE_TTL_SEC = 15 * 60;
 const DEFAULT_DEMO_AUTONUMBERS = ['KA01AB1234', 'KA02CD5678'];
 const TEMP_DEMO_AUTONUMBER = 'KA01AB0000';
 const TEMP_DEMO_CHALLENGE_PREFIX = 'cms-demo-challenge';
-const TEMP_DEMO_SESSION_PREFIX = 'cms-demo-session';
 
 type TemporaryDemoClaims = {
   jti: string;
@@ -633,7 +633,7 @@ export class AuthService {
       exp: Math.floor(Date.now() / 1000) + expiresIn,
     };
     const accessToken = this.signTemporaryDemoToken(
-      TEMP_DEMO_SESSION_PREFIX,
+      CMS_DEMO_SESSION_PREFIX,
       sessionClaims,
     );
     return this.temporaryDemoSession(sessionClaims, accessToken, expiresIn);
@@ -644,7 +644,7 @@ export class AuthService {
   ): Promise<SessionPayload> {
     const claims = this.verifyTemporaryDemoToken(
       accessToken,
-      TEMP_DEMO_SESSION_PREFIX,
+      CMS_DEMO_SESSION_PREFIX,
     );
     return this.temporaryDemoSession(
       claims,
@@ -701,7 +701,7 @@ export class AuthService {
 
   async logout(accessToken: string | undefined) {
     if (!accessToken) return { ok: true };
-    if (accessToken.startsWith(`${TEMP_DEMO_SESSION_PREFIX}.`)) {
+    if (accessToken.startsWith(`${CMS_DEMO_SESSION_PREFIX}.`)) {
       try {
         const session = await this.resolveTemporaryDemoSession(accessToken);
         await this.location.stopForSession(session);
@@ -733,7 +733,7 @@ export class AuthService {
   }
 
   async resolveSession(accessToken: string) {
-    if (accessToken.startsWith(`${TEMP_DEMO_SESSION_PREFIX}.`)) {
+    if (accessToken.startsWith(`${CMS_DEMO_SESSION_PREFIX}.`)) {
       return this.resolveTemporaryDemoSession(accessToken);
     }
 

@@ -307,6 +307,35 @@ describe('AuthService demo OTP vehicle flow', () => {
     );
   });
 
+  it('uses Supabase SMS for the temporary demo plate when CMS_DEMO_AUTH is off', async () => {
+    const tables = registeredVehicleRows();
+    tables.cms_vehicles[0].auto_number = 'KA01AB0000';
+    tables.cms_vehicles[0].registered_mobile = '9876543210';
+    tables.cms_vehicles[0].mobile_e164 = '+919876543210';
+    const { auth, signInWithOtp, verifyOtp } = createAuthHarness(
+      {
+        CMS_DEMO_AUTH: 'false',
+        CMS_DEV_AUTH: 'false',
+        NODE_ENV: 'production',
+        VERCEL_ENV: 'production',
+      },
+      tables,
+    );
+
+    const lookup = await auth.lookupAutoNumber('KA01-AB 0000');
+
+    expect(lookup.devMode).toBe(false);
+    expect(signInWithOtp).toHaveBeenCalledWith({ phone: '+919876543210' });
+    await expect(auth.verifyOtp(lookup.challengeId, '123456')).rejects.toThrow(
+      'Invalid or expired OTP',
+    );
+    expect(verifyOtp).toHaveBeenCalledWith({
+      phone: '+919876543210',
+      token: '123456',
+      type: 'sms',
+    });
+  });
+
   it('rate limits temporary demo lookups without Redis', async () => {
     const tables = registeredVehicleRows();
     tables.cms_vehicles[0].auto_number = 'KA01AB0000';

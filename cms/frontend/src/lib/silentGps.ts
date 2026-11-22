@@ -10,7 +10,7 @@
 
 import { Capacitor } from '@capacitor/core';
 import { ApiError, api } from './api';
-import { loadSession } from './session';
+import { hasSessionCredential, loadSession } from './session';
 
 /** Steady cadence when stationary. Movement posts sooner (see MOVE_MIN_INTERVAL_MS). */
 const DEFAULT_POST_INTERVAL_MS = 10_000;
@@ -136,7 +136,7 @@ function isNativeApp(): boolean {
   }
 }
 
-async function postFix(pos: GeolocationPosition, token: string) {
+async function postFix(pos: GeolocationPosition, token?: string) {
   const interval = postIntervalMs();
   const now = Date.now();
   const lat = pos.coords.latitude;
@@ -194,15 +194,15 @@ async function postFix(pos: GeolocationPosition, token: string) {
   }
 }
 
-function scheduleFlush(token: string, waitMs?: number) {
+function scheduleFlush(token?: string, waitMs?: number) {
   if (flushTimer != null) return;
   const wait = waitMs ?? postIntervalMs();
   flushTimer = window.setTimeout(() => {
     flushTimer = undefined;
     if (!running || !pending) return;
     const session = loadSession();
+    if (!hasSessionCredential(session)) return;
     const t = session?.accessToken ?? token;
-    if (!t) return;
     void postFix(pending, t);
   }, wait);
 }
@@ -238,7 +238,7 @@ function handleBrowserPositionError(error: GeolocationPositionError) {
   );
 }
 
-function requestCurrentPosition(token: string) {
+function requestCurrentPosition(token?: string) {
   if (!running || positionRequestInFlight) return;
   positionRequestInFlight = true;
   navigator.geolocation.getCurrentPosition(
@@ -254,7 +254,7 @@ function requestCurrentPosition(token: string) {
   );
 }
 
-function startBrowserWatch(token: string) {
+function startBrowserWatch(token?: string) {
   if (!('geolocation' in navigator)) return;
   if (watchId == null) {
     watchId = navigator.geolocation.watchPosition(
@@ -282,8 +282,8 @@ function startBrowserWatch(token: string) {
  */
 export async function startSilentGps(accessToken?: string) {
   const session = loadSession();
+  if (!hasSessionCredential(session)) return;
   const token = accessToken ?? session?.accessToken;
-  if (!token) return;
   if (running) return;
 
   if (
@@ -304,7 +304,7 @@ export async function startSilentGps(accessToken?: string) {
 
   const intervalMs = postIntervalMs();
   const bridge = nativeBridge();
-  if (bridge?.start) {
+  if (token && bridge?.start) {
     try {
       await bridge.start({
         accessToken: token,
@@ -350,7 +350,7 @@ export async function stopSilentGps(accessToken?: string) {
 
   const session = loadSession();
   const token = accessToken ?? session?.accessToken;
-  if (token) {
+  if (hasSessionCredential(session)) {
     try {
       await api.stopLocation(token);
     } catch {

@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState, type SyntheticEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ApiError, api, type DashboardResponse } from '../lib/api';
-import { clearSession, loadSession } from '../lib/session';
+import {
+  clearSession,
+  hasSessionCredential,
+  loadSession,
+} from '../lib/session';
 import {
   getSilentGpsError,
   getSilentGpsStatus,
@@ -21,19 +25,6 @@ const POLL_BACKOFF_MAX_MS = 30_000;
 const IMAGE_DEFAULT_DWELL_MS = 15_000;
 /** Image creatives only — videos must not enter Cache Storage (Range breakage). */
 const MEDIA_CACHE = 'cms-ad-media-images-v2';
-/** Same demo OTP as login (`OtpPage` / API seed). */
-const DEFAULT_LOGOUT_OTP = '123456';
-const OTP_LEN = 6;
-
-/** Demo OTP 123456; override with VITE_LOGOUT_OTP or ?logoutOtp= / ?otp= */
-function resolveLogoutOtp(search: URLSearchParams): string {
-  const fromQuery = (search.get('logoutOtp') ?? search.get('otp') ?? '').trim();
-  if (/^\d{6}$/.test(fromQuery)) return fromQuery;
-  const fromEnv = String(import.meta.env.VITE_LOGOUT_OTP ?? '').trim();
-  if (/^\d{6}$/.test(fromEnv)) return fromEnv;
-  return DEFAULT_LOGOUT_OTP;
-}
-
 function isPlayableMediaUrl(url: string | null | undefined): url is string {
   if (!url || typeof url !== 'string') return false;
   const trimmed = url.trim();
@@ -120,8 +111,8 @@ async function tryPlay(el: HTMLVideoElement | null) {
  * Portrait phones: CSS-rotate stage 90° (+ best-effort orientation.lock) so playback
  * looks like landscape fullscreen; object-fit: contain (whole creative, no cover crop).
  * Log out visible ~1 min after load; then long-press / brief corner tap / ?ops=1.
- * Logout requires demo OTP 123456 (same as login). Dual video slots for seamless swaps.
- * Ad stage blocks all touch; only Log out (when visible) and OTP dialog stay interactive.
+ * The display can be exited from its hidden operator controls. Dual video slots
+ * keep ad playback seamless; the ad stage blocks passenger touch input.
  */
 export function DisplayScreen() {
   const navigate = useNavigate();
@@ -148,9 +139,7 @@ export function DisplayScreen() {
     if (v === '0' || v === 'false') return false;
     return true;
   });
-  const [otpOpen, setOtpOpen] = useState(false);
-  const [otpDigits, setOtpDigits] = useState('');
-  const [otpError, setOtpError] = useState<string | null>(null);
+  const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
   const [mediaError, setMediaError] = useState(false);
   const [gpsError, setGpsError] = useState(getSilentGpsError);
   const [gpsStatus, setGpsStatus] =
@@ -166,7 +155,6 @@ export function DisplayScreen() {
       ? window.matchMedia('(orientation: portrait)').matches
       : false,
   );
-  const expectedLogoutOtp = resolveLogoutOtp(searchParams);
 
   useEffect(() => {
     const onGpsStatus = (event: Event) => {
@@ -203,58 +191,25 @@ export function DisplayScreen() {
     setOpsOpen(true);
   }
 
-  function openLogoutOtp() {
+  function openLogoutConfirmation() {
     clearOpsHideTimer();
-    setOtpDigits('');
-    setOtpError(null);
-    setOtpOpen(true);
+    setLogoutConfirmOpen(true);
   }
 
-  function closeLogoutOtp() {
-    setOtpOpen(false);
-    setOtpDigits('');
-    setOtpError(null);
+  function closeLogoutConfirmation() {
+    setLogoutConfirmOpen(false);
     if (opsOpen) scheduleOpsHide();
-  }
-
-  function appendOtpDigit(d: string) {
-    setOtpError(null);
-    setOtpDigits((prev) => {
-      if (prev.length >= OTP_LEN) return prev;
-      const next = prev + d;
-      if (next.length === expectedLogoutOtp.length) {
-        window.setTimeout(() => verifyLogoutOtp(next), 0);
-      }
-      return next;
-    });
-  }
-
-  function backspaceOtp() {
-    setOtpError(null);
-    setOtpDigits((prev) => prev.slice(0, -1));
-  }
-
-  function verifyLogoutOtp(digits: string) {
-    if (digits === expectedLogoutOtp) {
-      void doLogout();
-      return;
-    }
-    setOtpError('Incorrect OTP');
-    setOtpDigits('');
-  }
-
-  function submitLogoutOtp() {
-    verifyLogoutOtp(otpDigits);
   }
 
   async function doLogout() {
     const token = session?.accessToken;
     // Stop silent GPS before clearing session (token still needed for /location/stop).
     void stopSilentGps(token);
+    setLogoutConfirmOpen(false);
     // Leave the display immediately — don't block on network logout.
     clearSession();
     navigate('/', { replace: true });
-    if (token) {
+    if (hasSessionCredential(session)) {
       try {
         await api.logout(token);
       } catch {
@@ -264,7 +219,7 @@ export function DisplayScreen() {
   }
 
   useEffect(() => {
-    if (!session?.accessToken) {
+    if (!hasSessionCredential(session)) {
       navigate('/', { replace: true });
       return;
     }
@@ -408,20 +363,20 @@ export function DisplayScreen() {
 
   // Ops chrome (Log out included) visible ~1 min, then auto-hide. Pause while OTP dialog open.
   useEffect(() => {
-    if (!opsOpen || otpOpen) {
+    if (!opsOpen || logoutConfirmOpen) {
       clearOpsHideTimer();
       return;
     }
     scheduleOpsHide();
     return () => clearOpsHideTimer();
-  }, [opsOpen, otpOpen]);
+  }, [opsOpen, logoutConfirmOpen]);
 
   const playing = data?.currentlyPlaying ?? null;
   const mediaUrl = playing?.mediaUrl ?? null;
   const canShowCreative = isPlayableMediaUrl(mediaUrl) && !mediaError;
 
   async function refreshDashboard() {
-    if (!session?.accessToken) return;
+    if (!hasSessionCredential(session)) return;
     try {
       const dash = await api.dashboard(session.accessToken);
       setData(dash);
@@ -433,7 +388,7 @@ export function DisplayScreen() {
   }
 
   async function advanceComplete(queueItemId: string) {
-    if (!session?.accessToken || advancingRef.current) return;
+    if (!hasSessionCredential(session) || advancingRef.current) return;
     advancingRef.current = true;
     try {
       await api.playerComplete(session.accessToken, queueItemId);
@@ -447,7 +402,7 @@ export function DisplayScreen() {
   }
 
   async function advanceFail(queueItemId: string, reason: string) {
-    if (!session?.accessToken || advancingRef.current) return;
+    if (!hasSessionCredential(session) || advancingRef.current) return;
     advancingRef.current = true;
     try {
       await api.playerFail(session.accessToken, queueItemId, reason);
@@ -654,7 +609,7 @@ export function DisplayScreen() {
   /** Brief corner tap (hotzone) also reveals ops — same as long-press unlock. */
   function onCornerBriefTap(clientX: number, clientY: number) {
     if (clientX > OPS_HOTZONE_PX || clientY > OPS_HOTZONE_PX) return;
-    if (opsOpen || otpOpen) return;
+    if (opsOpen || logoutConfirmOpen) return;
     openOpsChrome();
   }
 
@@ -824,89 +779,42 @@ export function DisplayScreen() {
           <button
             type="button"
             className="display-ops-logout pointer-events-auto rounded border border-[var(--cms-border)] bg-black/75 px-2 py-0.5 text-[10px] font-semibold leading-tight tracking-wide backdrop-blur-md"
-            onClick={openLogoutOtp}
+            onClick={openLogoutConfirmation}
           >
             Log out
           </button>
         </div>
       ) : null}
 
-      {/* Logout OTP pad — same demo code as login */}
-      {otpOpen ? (
+      {logoutConfirmOpen ? (
         <div
-          className="display-pin-overlay absolute inset-0 z-30 flex items-center justify-center bg-black/75 p-4"
+          className="absolute inset-0 z-30 flex items-center justify-center bg-black/75 p-4"
           role="dialog"
           aria-modal="true"
-          aria-label="Enter logout OTP"
+          aria-label="Confirm logout"
           onClick={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}
         >
-          <div className="display-pin-dialog w-full max-w-[280px] rounded-xl border border-[var(--cms-border)] bg-[var(--cms-bg-elevated)] p-4 shadow-lg">
+          <div className="w-full max-w-[280px] rounded-xl border border-[var(--cms-border)] bg-[var(--cms-bg-elevated)] p-4 shadow-lg">
             <p className="text-center text-sm font-semibold">
-              Enter OTP to log out
+              Log out of this vehicle display?
             </p>
-            <p
-              className="mt-3 flex justify-center gap-2 tracking-[0.35em] text-lg font-semibold"
-              aria-live="polite"
-            >
-              {Array.from({ length: OTP_LEN }).map((_, i) => (
-                <span
-                  key={i}
-                  className="inline-block h-2.5 w-2.5 rounded-full border border-white/40"
-                  style={{
-                    background:
-                      i < otpDigits.length
-                        ? 'var(--cms-accent)'
-                        : 'transparent',
-                  }}
-                />
-              ))}
-            </p>
-            {otpError ? (
-              <p className="mt-2 text-center text-xs text-[var(--cms-danger)]">
-                {otpError}
-              </p>
-            ) : (
-              <p className="mt-2 text-center text-[10px] text-[var(--cms-muted)]">
-                Demo OTP 123456
-              </p>
-            )}
-            <div className="display-pin-pad mt-3 grid grid-cols-3 gap-2">
-              {[
-                '1',
-                '2',
-                '3',
-                '4',
-                '5',
-                '6',
-                '7',
-                '8',
-                '9',
-                '⌫',
-                '0',
-                'OK',
-              ].map((key) => (
-                <button
-                  key={key}
-                  type="button"
-                  className="display-pin-key rounded-lg border border-[var(--cms-border)] bg-black/40 py-2.5 text-sm font-semibold text-white"
-                  onClick={() => {
-                    if (key === '⌫') backspaceOtp();
-                    else if (key === 'OK') submitLogoutOtp();
-                    else appendOtpDigit(key);
-                  }}
-                >
-                  {key}
-                </button>
-              ))}
+            <div className="mt-4 flex gap-2">
+              <button
+                type="button"
+                className="flex-1 rounded-lg border border-[var(--cms-border)] py-2 text-xs font-semibold text-[var(--cms-muted)]"
+                onClick={closeLogoutConfirmation}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="flex-1 rounded-lg bg-[var(--cms-accent)] py-2 text-xs font-semibold text-white"
+                onClick={() => void doLogout()}
+              >
+                Log out
+              </button>
             </div>
-            <button
-              type="button"
-              className="mt-3 w-full rounded-lg border border-[var(--cms-border)] py-2 text-xs font-semibold text-[var(--cms-muted)]"
-              onClick={closeLogoutOtp}
-            >
-              Cancel
-            </button>
           </div>
         </div>
       ) : null}
