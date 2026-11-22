@@ -8,7 +8,7 @@ import { usePwaInstall } from '../hooks/usePwaInstall';
 export function PwaInstallHint() {
   const { canPrompt, showIosHint, installed, promptInstall } = usePwaInstall();
 
-  if (installed || (!canPrompt && !showIosHint)) return null;
+  if (installed) return null;
 
   return (
     <div
@@ -34,9 +34,20 @@ export function PwaInstallHint() {
         </div>
       ) : (
         <p>
-          On iPhone/iPad: tap <strong className="text-[var(--cms-ink)]">Share</strong> →{' '}
-          <strong className="text-[var(--cms-ink)]">Add to Home Screen</strong> (needs
-          HTTPS).
+          {showIosHint ? (
+            <>
+              On iPhone/iPad: tap{' '}
+              <strong className="text-[var(--cms-ink)]">Share</strong> →{' '}
+              <strong className="text-[var(--cms-ink)]">Add to Home Screen</strong>.
+            </>
+          ) : (
+            <>
+              Open your browser menu and choose{' '}
+              <strong className="text-[var(--cms-ink)]">Install app</strong> or{' '}
+              <strong className="text-[var(--cms-ink)]">Add to Home Screen</strong>.
+            </>
+          )}{' '}
+          The site must use HTTPS.
         </p>
       )}
     </div>

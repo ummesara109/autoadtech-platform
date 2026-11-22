@@ -230,7 +230,14 @@ describe('AuthService demo OTP vehicle flow', () => {
   it('supports the temporary Production demo flow without Redis or Supabase SMS', async () => {
     const tables = registeredVehicleRows();
     tables.cms_vehicles[0].auto_number = 'KA01AB0000';
-    const { auth, verifyOtp, signInWithOtp, from, redis } = createAuthHarness(
+    const {
+      auth,
+      verifyOtp,
+      signInWithOtp,
+      from,
+      redis,
+      queue,
+    } = createAuthHarness(
       {
         CMS_DEMO_AUTH: 'true',
         NODE_ENV: 'production',
@@ -270,9 +277,11 @@ describe('AuthService demo OTP vehicle flow', () => {
     expect(session.operator.vehicleId).toBe('vehicle-1');
     expect(session.operator.autoNumber).toBe('KA01AB0000');
     expect(session.screen.id).toBe('screen-1');
-    const tamperedToken = `${session.accessToken.slice(0, -1)}${
-      session.accessToken.endsWith('A') ? 'B' : 'A'
-    }`;
+    expect(queue.ensureDevDemoAdsIfEmpty).toHaveBeenCalledWith('screen-1');
+    const signatureStart = session.accessToken.lastIndexOf('.') + 1;
+    const tamperedToken = `${session.accessToken.slice(0, signatureStart)}${
+      session.accessToken[signatureStart] === 'A' ? 'B' : 'A'
+    }${session.accessToken.slice(signatureStart + 1)}`;
     await expect(auth.resolveSession(tamperedToken)).rejects.toThrow(
       'Invalid or expired demo session',
     );

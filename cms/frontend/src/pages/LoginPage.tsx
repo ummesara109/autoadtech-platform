@@ -43,6 +43,7 @@ export function LoginPage() {
   return (
     <Shell narrow>
       <BrandMark />
+      <PwaInstallHint />
       {!online ? (
         <Alert tone="warn">
           Offline — install still works; sign-in needs network.
@@ -81,11 +82,6 @@ export function LoginPage() {
           the app.
         </p>
       </Panel>
-      <PwaInstallHint />
-      <p className="mt-3 text-center text-xs text-[var(--cms-muted)]">
-        Phone install needs HTTPS (Cloudflare Tunnel / ngrok). Chrome: Install
-        app · iOS: Share → Add to Home Screen.
-      </p>
     </Shell>
   );
 }

@@ -636,7 +636,19 @@ export class AuthService {
       CMS_DEMO_SESSION_PREFIX,
       sessionClaims,
     );
-    return this.temporaryDemoSession(sessionClaims, accessToken, expiresIn);
+    const session = await this.temporaryDemoSession(
+      sessionClaims,
+      accessToken,
+      expiresIn,
+    );
+    try {
+      await this.queue.ensureDevDemoAdsIfEmpty(session.screen.id);
+    } catch (err) {
+      this.logger.warn(
+        `Temporary demo queue seed skipped: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    return session;
   }
 
   private async resolveTemporaryDemoSession(
