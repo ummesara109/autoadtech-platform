@@ -74,27 +74,38 @@ async function decideCampaign(campaignId, decision, rejectionReason = '') {
     .from('campaigns')
     .update(updates)
     .eq('id', campaignId)
+    .eq('status', 'Pending Approval')
     .select()
-    .single();
+    .maybeSingle();
 
   if (updateError) throw updateError;
+  if (!saved) throw new Error('Campaign was already reviewed. Refresh the campaign list.');
 
   if (decision === 'Scheduled') {
-    const invoiceId = `inv${randomUUID().replace(/-/g, '').slice(0, 8)}`;
-    const { error: invoiceError } = await supabase.from('invoices').insert({
-      id: invoiceId,
-      owner_id: campaign.owner_id,
-      campaign_id: campaign.id,
-      number: `NIYO-${decidedAt.replace(/-/g, '')}-${invoiceId.slice(-4).toUpperCase()}`,
-      issued_at: decidedAt,
-      description: `Campaign: ${campaign.name}`,
-      amount: Number(campaign.budget),
-      status: 'Pending',
-      paid_at: null,
-      reference: ''
-    });
+    const { data: existingInvoice, error: invoiceReadError } = await supabase
+      .from('invoices')
+      .select('id')
+      .eq('campaign_id', campaign.id)
+      .maybeSingle();
 
-    if (invoiceError) throw invoiceError;
+    if (invoiceReadError) throw invoiceReadError;
+    if (!existingInvoice) {
+      const invoiceId = `inv${randomUUID().replace(/-/g, '').slice(0, 8)}`;
+      const { error: invoiceError } = await supabase.from('invoices').insert({
+        id: invoiceId,
+        owner_id: campaign.owner_id,
+        campaign_id: campaign.id,
+        number: `NIYO-${decidedAt.replace(/-/g, '')}-${invoiceId.slice(-4).toUpperCase()}`,
+        issued_at: decidedAt,
+        description: `Campaign: ${campaign.name}`,
+        amount: Number(campaign.budget),
+        status: 'Pending',
+        paid_at: null,
+        reference: ''
+      });
+
+      if (invoiceError) throw invoiceError;
+    }
   }
 
   return saved;

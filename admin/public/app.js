@@ -116,12 +116,12 @@ const S = {
   support: { t: "Support", add: "New ticket", def: { status: "Open", prio: "Medium" }, f: [["subj", "Subject"], ["user", "User"], ["prio", "Priority", ["High", "Medium", "Low"]], ["status", "Status", ["Open", "In progress", "Resolved", "Closed"]]] },
   audit: { t: "Audit Logs", ro: 1, f: [["action", "Action"], ["user", "User"], ["at", "Date & time", "datetime"], ["ip", "IP address"]] }
 };
-const LABEL = { clientlogins: "Client Logins", dashboard: "Dashboard", live: "Live Monitoring", cmsotp: "CMS OTP Inbox", analytics: "Analytics & Reports", settings: "Settings" };
+const LABEL = { clientlogins: "Client Logins", dashboard: "Dashboard", live: "Live Monitoring", cmsotp: "CMS OTP Inbox", analytics: "Analytics & Reports", delivery: "Campaign Delivery", settings: "Settings" };
 const CT = { campaigns: "My Campaigns", inventory: "Ad Packages", billing: "Billing & Invoices", support: "Support" };
 const title = k => (PORTAL === "client" && CT[k]) || (S[k] && S[k].t) || LABEL[k];
-const ICON = { clientlogins: "login", dashboard: "home", users: "users", advertisers: "mega", partners: "idcard", vehicles: "car", devices: "monitor", campaigns: "flag", inventory: "tag", live: "radio", cmsotp: "shield", analytics: "bars", billing: "card", settings: "sliders", support: "life", audit: "shield" };
+const ICON = { clientlogins: "login", dashboard: "home", users: "users", advertisers: "mega", partners: "idcard", vehicles: "car", devices: "monitor", campaigns: "flag", delivery: "radio", inventory: "tag", live: "radio", cmsotp: "shield", analytics: "bars", billing: "card", settings: "sliders", support: "life", audit: "shield" };
 const GROUPS = {
-  admin: [["Overview", ["dashboard", "clientlogins", "cmsotp"]], ["Management", ["users", "advertisers", "partners", "vehicles", "devices"]], ["Advertising", ["campaigns", "inventory", "live", "analytics"]], ["Finance", ["billing"]], ["System", ["settings", "support", "audit"]]],
+  admin: [["Overview", ["dashboard", "clientlogins", "cmsotp"]], ["Management", ["users", "advertisers", "partners", "vehicles", "devices"]], ["Advertising", ["campaigns", "delivery", "inventory", "live", "analytics"]], ["Finance", ["billing"]], ["System", ["settings", "support", "audit"]]],
   client: [["Overview", ["dashboard"]], ["Advertising", ["campaigns", "inventory"]], ["Finance", ["billing"]], ["Help", ["support"]]]
 };
 const HIDECOL = { billing: ["adv"], campaigns: ["adv"], support: ["user"] }, FORMHIDE = { campaigns: ["adv", "status"], support: ["user", "status"] };
@@ -1241,6 +1241,45 @@ const V = {
     <div class="grid g2" style="margin-top:18px"><div class="card"><h3>Performance overview</h3><svg viewBox="0 0 420 160" width="100%" role="img" aria-label="Impressions">${v.map((x, i) => `<rect x="${14 + i * 34}" y="${150 - x / 90 * 130}" width="22" height="${x / 90 * 130}" rx="3" fill="var(--c1)" opacity="${i % 2 ? .45 : 1}"/>`).join("")}</svg></div>
     <div class="card"><h3>Top campaigns</h3>${parts.length ? `<div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap">${donut(parts)}${legend(parts)}</div>` : `<p class="muted">No approved campaigns yet.</p>`}</div></div>`;
     $("#rg").onchange = e => { V.range = Number(e.target.value); V.analytics(); };
+  },
+  async delivery() {
+    $("#view").innerHTML = `<div class="card"><p class="muted">Loading advertiser campaigns and device assignments…</p></div>`;
+    try {
+      const result = await API("GET", "/api/campaign-delivery");
+      const campaigns = result.campaigns || [];
+      const canReview = ME.role !== "Viewer" && !VIEW;
+      const stats = result.totals || {};
+      $("#view").innerHTML = `      <div class="grid g4">${stat("Selected vehicles", stats.selectedVehicles || 0)}${stat("Successfully assigned to CMS queue", stats.assignedDevices || 0)}${stat("Pending assignments", stats.pendingAssignments || 0)}${stat("Failed assignments", stats.failedAssignments || 0)}</div>
+      <div class="card tcard" style="margin-top:18px"><div class="ch"><h3>Advertiser campaign approvals and delivery</h3><span>${campaigns.length} campaign${campaigns.length === 1 ? "" : "s"}</span></div>
+      <div class="tw"><table><thead><tr><th>Campaign</th><th>Advertiser</th><th>Approval</th><th>Vehicles</th><th>Devices assigned</th><th>Pending</th><th>Failed</th><th>Schedule</th><th>Actions</th></tr></thead><tbody>
+      ${campaigns.map(c => `<tr><td><b>${esc(c.name)}</b><details style="margin-top:6px"><summary>Vehicle / screen assignments (${(c.assignments || []).length})</summary><div style="min-width:380px;padding:8px 0">${(c.assignments || []).map(a => `<div class="tg"><span><b>${esc(a.vehicleNo || "Vehicle")}</b><small style="display:block">${esc(a.deviceId || "Device")} · screen ${esc(a.screenId || "-")}</small>${a.lastError ? `<small style="display:block;color:#b42318">${esc(a.lastError)}</small>` : ""}</span><span>${badge(a.status)}${canReview && a.status === "failed" && a.retryable ? ` <button class="btn ghost" data-retry="${esc(a.id)}">Retry</button>` : ""}</span></div>`).join("") || `<span class="muted">No device assignments yet.</span>`}</div></details></td>
+      <td>${esc(c.advertiser || "-")}</td><td>${badge(c.status)}</td><td>${c.selectedVehicles || 0} / ${c.autosBooked || 0}</td><td>${c.assignedDevices || 0}</td><td>${c.pendingAssignments || 0}</td><td>${c.failedAssignments || 0}</td>
+      <td>${esc(c.startDate || "-")} – ${esc(c.endDate || "-")}<small style="display:block">${esc(c.startTime || "")} – ${esc(c.endTime || "")}</small></td>
+      <td>${canReview && c.status === "Pending Approval" ? `<div class="row"><button class="btn" data-approve="${esc(c.id)}">Approve & assign</button><button class="btn ghost" data-reject="${esc(c.id)}">Reject</button></div>` : "—"}</td></tr>`).join("")}
+      </tbody></table></div>${campaigns.length ? "" : `<div class="empty">No advertiser campaigns found.</div>`}</div>`;
+      $("#view").onclick = async event => {
+        const button = event.target.closest("button[data-approve],button[data-reject],button[data-retry]");
+        if (!button) return;
+        try {
+          if (button.dataset.approve) {
+            const done = await API("POST", `/api/campaign-delivery/${encodeURIComponent(button.dataset.approve)}/approve`, {});
+            toast(`Approved; ${done.selectedVehicles} vehicle(s) targeted.`);
+          } else if (button.dataset.reject) {
+            await API("POST", `/api/campaign-delivery/${encodeURIComponent(button.dataset.reject)}/reject`, { reason: "Rejected by administrator" });
+            toast("Campaign rejected.");
+          } else {
+            await API("POST", `/api/campaign-delivery/${encodeURIComponent(button.dataset.retry)}/retry`, {});
+            toast("Delivery retry scheduled.");
+          }
+          await V.delivery();
+        } catch (error) {
+          toast(error.message);
+        }
+      };
+    } catch (error) {
+      $("#view").innerHTML = `<div class="card"><h3>Campaign delivery unavailable</h3><p class="muted">${esc(error.message)}</p><button class="btn" id="delivery-reload">Retry</button></div>`;
+      $("#delivery-reload").onclick = () => V.delivery();
+    }
   },
   async cmsotp() {
     let pending = [], delivery = "Admin dashboard OTP inbox", err = null;

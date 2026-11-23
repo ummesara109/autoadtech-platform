@@ -13,6 +13,19 @@ import {
   stopSilentGps,
   type SilentGpsStatus,
 } from '../lib/silentGps';
+import {
+  advanceOfflineSnapshot,
+  cacheAssignedVideos,
+  cachedNativeVideoUrl,
+  cleanupUnassignedImages,
+  isCampaignExpired,
+  loadDisplaySnapshot,
+  pendingPlaybackEvents,
+  queuePlaybackEvent,
+  removePlaybackEvent,
+  saveDisplaySnapshot,
+} from '../lib/displayOffline';
+import { useOnline } from '../hooks/useOnline';
 
 /** Top-left corner long-press (ms) to open operator chrome — not discoverable by passengers. */
 const OPS_LONG_PRESS_MS = 2800;
@@ -118,6 +131,8 @@ export function DisplayScreen() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const session = loadSession();
+  const online = useOnline();
+  const screenId = session?.screen?.id;
   const rootRef = useRef<HTMLDivElement>(null);
   const slotRefs = [
     useRef<HTMLVideoElement>(null),
@@ -129,10 +144,14 @@ export function DisplayScreen() {
   const missingMediaHandled = useRef<string | null>(null);
   const imageTimer = useRef<number | null>(null);
   const pollBackoff = useRef(POLL_ONLINE_MS);
+  const playbackSyncInFlight = useRef(false);
   const activeSlotRef = useRef<0 | 1>(0);
   const playingIdRef = useRef<string | null>(null);
   const swapGenRef = useRef(0);
-  const [data, setData] = useState<DashboardResponse | null>(null);
+  const startedPlaybackIds = useRef(new Set<string>());
+  const [data, setData] = useState<DashboardResponse | null>(() =>
+    !navigator.onLine ? loadDisplaySnapshot(screenId) : null,
+  );
   // After login/display load: Log out visible for OPS_VISIBLE_MS (1 min). ?ops=0 forces hidden.
   const [opsOpen, setOpsOpen] = useState(() => {
     const v = searchParams.get('ops') ?? searchParams.get('unlock');
@@ -150,6 +169,11 @@ export function DisplayScreen() {
     null,
   ]);
   const [imageSrc, setImageSrc] = useState<string | null>(null);
+  const [imageReadyId, setImageReadyId] = useState<string | null>(null);
+  const [offlineVideo, setOfflineVideo] = useState<{
+    queueItemId: string;
+    url: string;
+  } | null>(null);
   const [viewportPortrait, setViewportPortrait] = useState(() =>
     typeof window !== 'undefined'
       ? window.matchMedia('(orientation: portrait)').matches
@@ -171,6 +195,22 @@ export function DisplayScreen() {
     return () => window.removeEventListener('niyoads:gps-status', onGpsStatus);
   }, []);
   const rotateStage = viewportPortrait && searchParams.get('noRotate') !== '1';
+
+  function applyDashboard(dash: DashboardResponse) {
+    if (screenId && dash.screen.id === screenId) {
+      try {
+        saveDisplaySnapshot(screenId, dash);
+      } catch (error) {
+        console.warn('Display queue snapshot could not be persisted', error);
+      }
+      if (data) {
+        void cleanupUnassignedImages(data, dash).catch((error: unknown) => {
+          console.warn('Expired image creatives could not be cleaned up', error);
+        });
+      }
+    }
+    setData(dash);
+  }
 
   function clearOpsHideTimer() {
     if (opsHideTimer.current) {
@@ -231,9 +271,10 @@ export function DisplayScreen() {
 
     async function load() {
       try {
+        if (navigator.onLine) await syncPendingPlaybackEvents();
         const dash = await api.dashboard(session!.accessToken);
         if (!cancelled) {
-          setData(dash);
+          applyDashboard(dash);
           pollBackoff.current = POLL_ONLINE_MS;
         }
       } catch (err) {
@@ -247,6 +288,10 @@ export function DisplayScreen() {
             clearSession();
             navigate('/', { replace: true });
             return;
+          }
+          if (!data && screenId) {
+            const cached = loadDisplaySnapshot(screenId);
+            if (cached) applyDashboard(cached);
           }
           pollBackoff.current = Math.min(
             pollBackoff.current * 1.5,
@@ -266,7 +311,7 @@ export function DisplayScreen() {
       cancelled = true;
       if (timer) window.clearTimeout(timer);
     };
-  }, []);
+  }, [online]);
 
   // Soft-lock: discourage accidental leave. Cannot block Android system nav / Home.
   useEffect(() => {
@@ -375,11 +420,142 @@ export function DisplayScreen() {
   const mediaUrl = playing?.mediaUrl ?? null;
   const canShowCreative = isPlayableMediaUrl(mediaUrl) && !mediaError;
 
+  useEffect(() => {
+    if (!online) return;
+    void syncPendingPlaybackEvents().then((synced) => {
+      if (synced) void refreshDashboard();
+    });
+  }, [online]);
+
+  useEffect(() => {
+    if (!online || !screenId || !hasSessionCredential(session)) return;
+    let cancelled = false;
+    const sendHeartbeat = async () => {
+      try {
+        await api.playerHeartbeat(session.accessToken, {
+          queueItemId: playing?.id,
+          status: mediaError ? 'error' : playing ? 'playing' : 'idle',
+          playbackError: mediaError ? 'media_playback_error' : undefined,
+        });
+      } catch (error) {
+        if (cancelled) return;
+        if (
+          error instanceof ApiError &&
+          (error.status === 401 || error.status === 403)
+        ) {
+          void stopSilentGps(session.accessToken);
+          clearSession();
+          navigate('/', { replace: true });
+        } else {
+          console.warn('Display heartbeat will retry', error);
+        }
+      }
+    };
+    void sendHeartbeat();
+    const timer = window.setInterval(() => void sendHeartbeat(), 20_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [online, screenId, playing?.id, mediaError]);
+
+  async function sendPlaybackEvent(
+    event: ReturnType<typeof pendingPlaybackEvents>[number],
+  ) {
+    if (!hasSessionCredential(session)) return;
+    if (event.type === 'start') {
+      await api.playerStart(
+        session.accessToken,
+        event.queueItemId,
+        event.occurredAt,
+      );
+    } else if (event.type === 'complete') {
+      await api.playerComplete(
+        session.accessToken,
+        event.queueItemId,
+        event.occurredAt,
+      );
+    } else {
+      await api.playerFail(
+        session.accessToken,
+        event.queueItemId,
+        event.reason,
+        event.occurredAt,
+      );
+    }
+  }
+
+  async function syncPendingPlaybackEvents() {
+    if (
+      !online ||
+      !screenId ||
+      !hasSessionCredential(session) ||
+      playbackSyncInFlight.current
+    ) {
+      return false;
+    }
+    playbackSyncInFlight.current = true;
+    try {
+      for (const event of pendingPlaybackEvents(screenId)) {
+        await sendPlaybackEvent(event);
+        removePlaybackEvent(screenId, event);
+      }
+      return true;
+    } catch (error) {
+      if (
+        error instanceof ApiError &&
+        (error.status === 401 || error.status === 403)
+      ) {
+        void stopSilentGps(session.accessToken);
+        clearSession();
+        navigate('/', { replace: true });
+      } else {
+        console.warn('Pending display playback event will be retried', error);
+      }
+      return false;
+    } finally {
+      playbackSyncInFlight.current = false;
+    }
+  }
+
+  async function recordPlaybackStart(queueItemId: string) {
+    if (
+      !hasSessionCredential(session) ||
+      startedPlaybackIds.current.has(queueItemId) ||
+      !screenId
+    ) {
+      return;
+    }
+    startedPlaybackIds.current.add(queueItemId);
+    if (startedPlaybackIds.current.size > 64) {
+      const oldest = startedPlaybackIds.current.values().next().value;
+      if (oldest) startedPlaybackIds.current.delete(oldest);
+    }
+    const event = {
+      type: 'start' as const,
+      queueItemId,
+      occurredAt: new Date().toISOString(),
+    };
+    try {
+      queuePlaybackEvent(screenId, event);
+    } catch (error) {
+      console.error('Playback start could not be saved for synchronization', error);
+    }
+    if (online) await syncPendingPlaybackEvents();
+  }
+
+  function advanceOffline(queueItemId: string, occurredAt: string) {
+    if (!screenId || !data) return;
+    applyDashboard(advanceOfflineSnapshot(data, queueItemId, occurredAt));
+    setMediaError(false);
+    setImageReadyId(null);
+  }
+
   async function refreshDashboard() {
     if (!hasSessionCredential(session)) return;
     try {
       const dash = await api.dashboard(session.accessToken);
-      setData(dash);
+      applyDashboard(dash);
       setMediaError(false);
       pollBackoff.current = POLL_ONLINE_MS;
     } catch {
@@ -388,27 +564,57 @@ export function DisplayScreen() {
   }
 
   async function advanceComplete(queueItemId: string) {
-    if (!hasSessionCredential(session) || advancingRef.current) return;
+    if (
+      !hasSessionCredential(session) ||
+      advancingRef.current ||
+      !screenId
+    ) return;
     advancingRef.current = true;
+    const event = {
+      type: 'complete' as const,
+      queueItemId,
+      occurredAt: new Date().toISOString(),
+    };
     try {
-      await api.playerComplete(session.accessToken, queueItemId);
-      await refreshDashboard();
-    } catch {
-      /* conflict / offline — next poll will resync */
-      await refreshDashboard();
+      queuePlaybackEvent(screenId, event);
+      const synced = await syncPendingPlaybackEvents();
+      if (synced) {
+        await refreshDashboard();
+      } else {
+        advanceOffline(queueItemId, event.occurredAt);
+      }
+    } catch (error) {
+      console.error('Playback completion could not be persisted', error);
+      advanceOffline(queueItemId, event.occurredAt);
     } finally {
       advancingRef.current = false;
     }
   }
 
   async function advanceFail(queueItemId: string, reason: string) {
-    if (!hasSessionCredential(session) || advancingRef.current) return;
+    if (
+      !hasSessionCredential(session) ||
+      advancingRef.current ||
+      !screenId
+    ) return;
     advancingRef.current = true;
+    const event = {
+      type: 'fail' as const,
+      queueItemId,
+      reason,
+      occurredAt: new Date().toISOString(),
+    };
     try {
-      await api.playerFail(session.accessToken, queueItemId, reason);
-      await refreshDashboard();
-    } catch {
-      await refreshDashboard();
+      queuePlaybackEvent(screenId, event);
+      const synced = await syncPendingPlaybackEvents();
+      if (synced) {
+        await refreshDashboard();
+      } else {
+        advanceOffline(queueItemId, event.occurredAt);
+      }
+    } catch (error) {
+      console.error('Playback failure could not be persisted', error);
+      advanceOffline(queueItemId, event.occurredAt);
     } finally {
       advancingRef.current = false;
     }
@@ -421,28 +627,40 @@ export function DisplayScreen() {
     }
     const upcoming = data?.upcomingQueue ?? [];
     for (const item of upcoming) {
-      if (isPlayableMediaUrl(item.mediaUrl)) {
+      if (!isCampaignExpired(item) && isPlayableMediaUrl(item.mediaUrl)) {
         void warmCreativeUrl(item.mediaUrl);
       }
     }
   }, [canShowCreative, mediaUrl, data?.upcomingQueue]);
 
+  useEffect(() => {
+    if (!screenId || !data || !online) return;
+    void cacheAssignedVideos(screenId, data).catch((error: unknown) => {
+      console.warn('Assigned media could not be cached for offline playback', error);
+    });
+  }, [screenId, data?.currentlyPlaying?.id, data?.upcomingQueue, online]);
+
   // Dual-slot video: keep showing previous ad until next slot can play.
   useEffect(() => {
     if (!playing?.id || !isPlayableMediaUrl(mediaUrl)) {
       playingIdRef.current = null;
+      setOfflineVideo(null);
       setSlotSrc([null, null]);
       setImageSrc(null);
+      setImageReadyId(null);
       return;
     }
 
     if (!isVideoUrl(mediaUrl)) {
       playingIdRef.current = playing.id;
+      setOfflineVideo(null);
       setImageSrc(mediaUrl);
       setSlotSrc([null, null]);
       return;
     }
 
+    setOfflineVideo(null);
+    setImageReadyId(null);
     setImageSrc(null);
     if (playingIdRef.current === playing.id) return;
 
@@ -529,6 +747,21 @@ export function DisplayScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playing?.id, mediaUrl]);
 
+  useEffect(() => {
+    if (
+      !offlineVideo ||
+      offlineVideo.queueItemId !== playing?.id ||
+      !isVideoUrl(mediaUrl ?? '')
+    ) {
+      return;
+    }
+    const video = slotRefs[activeSlotRef.current].current;
+    if (!video) return;
+    video.load();
+    void tryPlay(video);
+  }, [offlineVideo, playing?.id]);
+
+
   // Warm inactive slot with next queued video while current plays.
   useEffect(() => {
     const upcoming = data?.upcomingQueue ?? [];
@@ -567,6 +800,7 @@ export function DisplayScreen() {
     }
     if (!canShowCreative || !mediaUrl || !playing?.id) return;
     if (isVideoUrl(mediaUrl)) return;
+    if (imageReadyId !== playing.id) return;
     const dwellMs = Math.max(
       3_000,
       (playing.durationSec && playing.durationSec > 0
@@ -582,7 +816,13 @@ export function DisplayScreen() {
         imageTimer.current = null;
       }
     };
-  }, [canShowCreative, mediaUrl, playing?.id, playing?.durationSec]);
+  }, [
+    canShowCreative,
+    mediaUrl,
+    playing?.id,
+    playing?.durationSec,
+    imageReadyId,
+  ]);
 
   // Media load/decode error → fail current and fetch next (or black).
   useEffect(() => {
@@ -616,6 +856,34 @@ export function DisplayScreen() {
   function blockSurfaceInteraction(e: SyntheticEvent) {
     e.preventDefault();
     e.stopPropagation();
+  }
+
+  async function handleVideoError(slot: 0 | 1) {
+    if (
+      !playing?.id ||
+      !mediaUrl ||
+      offlineVideo?.queueItemId === playing.id
+    ) {
+      setMediaError(true);
+      return;
+    }
+    try {
+      const localUrl = screenId
+        ? await cachedNativeVideoUrl(screenId, {
+            id: playing.id,
+            mediaUrl,
+          })
+        : null;
+      if (localUrl && activeSlotRef.current === slot) {
+        setOfflineVideo({ queueItemId: playing.id, url: localUrl });
+        setMediaError(false);
+      } else {
+        setMediaError(true);
+      }
+    } catch (error) {
+      console.warn('Cached video could not be opened', error);
+      setMediaError(true);
+    }
   }
 
   const showVideoFrame = Boolean(
@@ -694,7 +962,12 @@ export function DisplayScreen() {
                         ? 'z-[1] opacity-100'
                         : 'z-0 opacity-0'
                     }`}
-                    src={slotSrc[slot] ?? undefined}
+                    src={
+                      offlineVideo?.queueItemId === playing?.id &&
+                      activeSlot === slot
+                        ? offlineVideo.url
+                        : (slotSrc[slot] ?? undefined)
+                    }
                     muted
                     playsInline
                     preload="auto"
@@ -713,13 +986,18 @@ export function DisplayScreen() {
                       if (activeSlot === slot)
                         void tryPlay(slotRefs[slot].current);
                     }}
+                    onPlaying={() => {
+                      if (activeSlot === slot && playing?.id) {
+                        void recordPlaybackStart(playing.id);
+                      }
+                    }}
                     onEnded={() => {
                       if (activeSlot === slot && playing?.id) {
                         void advanceComplete(playing.id);
                       }
                     }}
                     onError={() => {
-                      if (activeSlot === slot) setMediaError(true);
+                      if (activeSlot === slot) void handleVideoError(slot);
                     }}
                   />
                 ))}
@@ -730,6 +1008,12 @@ export function DisplayScreen() {
                 src={imageSrc!}
                 alt=""
                 draggable={false}
+                onLoad={() => {
+                  if (playing?.id) {
+                    setImageReadyId(playing.id);
+                    void recordPlaybackStart(playing.id);
+                  }
+                }}
                 onContextMenu={blockSurfaceInteraction}
                 onClick={blockSurfaceInteraction}
                 onError={() => setMediaError(true)}

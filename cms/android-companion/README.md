@@ -9,7 +9,7 @@
 | Local Capacitor plugin | `plugins/niyoads-silent-gps` |
 | Android FGS + notification | `plugins/.../LocationForegroundService.java` |
 | JS bridge | `frontend/src/lib/nativeGpsBridge.ts` → `window.NiyoAdsGps` |
-| Capacitor config | `frontend/capacitor.config.json` (`com.niyoads.autodisplay`) |
+| Capacitor config | `capacitor.config.json` (`com.niyoads.autodisplay`) |
 | Android app project | `frontend/android/` (`npm run build:android`) |
 
 ## Lifecycle

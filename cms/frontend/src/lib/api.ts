@@ -62,6 +62,7 @@ export type LookupResponse = {
   expiresInSec: number;
   autoNumber: string;
   devMode: boolean;
+  localDevelopmentAuth?: boolean;
 };
 
 export type Screen = {
@@ -103,6 +104,7 @@ export type DashboardResponse = {
     durationSec: number;
     status?: string;
     startedAt?: string | null;
+    expiresAt?: string | null;
     /** Real creative URL from ad delivery — display only renders when set. */
     mediaUrl?: string | null;
     externalAdId?: string | null;
@@ -115,6 +117,7 @@ export type DashboardResponse = {
     position: number;
     status?: string;
     mediaUrl?: string | null;
+    expiresAt?: string | null;
   }>;
   playbackHistory: Array<{
     id: string;
@@ -145,6 +148,11 @@ export type DashboardResponse = {
     firmwareVersion: string;
     signalStrength: number | null;
     source: string;
+    screenStatus?: 'playing' | 'idle' | 'error' | 'offline';
+    currentQueueItemId?: string | null;
+    currentCampaignId?: string | null;
+    lastPlaybackError?: string | null;
+    lastSyncAt?: string | null;
   };
   placeholders: {
     ads: string;
@@ -183,7 +191,11 @@ export const api = {
    * Display player: mark current PLAYING complete and promote next.
    * Screen is bound to the session on the API — do not send screenId.
    */
-  playerComplete: (token: string | undefined, queueItemId: string) =>
+  playerComplete: (
+    token: string | undefined,
+    queueItemId: string,
+    occurredAt?: string,
+  ) =>
     request<{
       completedId?: string;
       playing?: DashboardResponse['currentlyPlaying'];
@@ -193,11 +205,16 @@ export const api = {
     }>('/api/queue/player/complete', {
       method: 'POST',
       token,
-      body: JSON.stringify({ queueItemId }),
+      body: JSON.stringify({ queueItemId, occurredAt }),
     }),
 
   /** Display player: fail broken/missing creative and advance. */
-  playerFail: (token: string | undefined, queueItemId: string, reason?: string) =>
+  playerFail: (
+    token: string | undefined,
+    queueItemId: string,
+    reason?: string,
+    occurredAt?: string,
+  ) =>
     request<{
       failedId?: string;
       playing?: DashboardResponse['currentlyPlaying'];
@@ -207,7 +224,40 @@ export const api = {
     }>('/api/queue/player/fail', {
       method: 'POST',
       token,
-      body: JSON.stringify({ queueItemId, reason }),
+      body: JSON.stringify({ queueItemId, reason, occurredAt }),
+    }),
+
+  playerStart: (
+    token: string | undefined,
+    queueItemId: string,
+    occurredAt: string,
+  ) =>
+    request<{ startedId: string; startedAt: string }>(
+      '/api/queue/player/start',
+      {
+        method: 'POST',
+        token,
+        body: JSON.stringify({ queueItemId, occurredAt }),
+      },
+    ),
+
+  playerHeartbeat: (
+    token: string | undefined,
+    body: {
+      queueItemId?: string;
+      status: 'playing' | 'idle' | 'error';
+      playbackError?: string;
+    },
+  ) =>
+    request<{
+      ok: boolean;
+      lastSeenAt: string;
+      lastSyncAt: string;
+      currentCampaignId?: string | null;
+    }>('/api/queue/player/heartbeat', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(body),
     }),
 
   /** Silent GPS ingest — session vehicle only; no CMS UI. */

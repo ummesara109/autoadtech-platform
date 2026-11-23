@@ -20,6 +20,7 @@ export type QueueItem = {
   externalAdId?: string | null;
   /** Real creative URL from ad delivery — display PWA only renders when set. */
   mediaUrl?: string | null;
+  expiresAt?: string | null;
   startedAt?: string | null;
   endedAt?: string | null;
   failReason?: string | null;
@@ -32,6 +33,7 @@ export type EnqueueAdInput = {
   durationSec?: number;
   externalAdId?: string;
   mediaUrl?: string;
+  expiresAt?: string;
 };
 
 export type PlaybackHistoryItem = {

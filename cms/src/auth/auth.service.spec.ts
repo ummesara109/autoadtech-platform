@@ -121,8 +121,9 @@ function createAuthHarness(
   const config = {
     get: jest.fn((key: string) => settings[key]),
   } as unknown as ConfigService;
+  const ensureDevDemoAdsIfEmpty = jest.fn().mockResolvedValue(undefined);
   const queue = {
-    ensureDevDemoAdsIfEmpty: jest.fn().mockResolvedValue(undefined),
+    ensureDevDemoAdsIfEmpty,
   } as unknown as QueueService;
   const auth = new AuthService(
     supabase,
@@ -131,7 +132,14 @@ function createAuthHarness(
     queue,
     {} as LocationService,
   );
-  return { auth, redis, verifyOtp, signInWithOtp, from, queue };
+  return {
+    auth,
+    redis,
+    verifyOtp,
+    signInWithOtp,
+    from,
+    ensureDevDemoAdsIfEmpty,
+  };
 }
 
 function registeredVehicleRows(): Record<string, TestRow[]> {
@@ -167,6 +175,25 @@ function registeredVehicleRows(): Record<string, TestRow[]> {
       placement: 'rear',
       is_active: true,
     })),
+    vehicle_cms_link: vehicles.map((vehicle, index) => ({
+      auto_number_norm: vehicle.auto_number,
+      admin_vehicle_id: `admin-vehicle-${index + 1}`,
+      admin_device_id: `device-pk-${index + 1}`,
+      cms_vehicle_id: vehicle.id,
+      cms_screen_id: `screen-${index + 1}`,
+      status: 'Active',
+    })),
+    admin_vehicles: vehicles.map((vehicle, index) => ({
+      id: `admin-vehicle-${index + 1}`,
+      payload: { no: vehicle.auto_number, status: 'Active' },
+    })),
+    admin_dm_devices: vehicles.map((vehicle, index) => ({
+      id: `device-pk-${index + 1}`,
+      device_id: `registered-device-${index + 1}`,
+      vehicle_id: `admin-vehicle-${index + 1}`,
+      vehicle_no: vehicle.auto_number,
+      lifecycle_status: 'active',
+    })),
   };
 }
 
@@ -179,7 +206,7 @@ describe('AuthService demo OTP vehicle flow', () => {
   };
 
   it('authenticates two registered vehicles without phone numbers using 123456', async () => {
-    const { auth, from, queue } = createAuthHarness(
+    const { auth, from, ensureDevDemoAdsIfEmpty } = createAuthHarness(
       previewSettings,
       registeredVehicleRows(),
     );
@@ -202,7 +229,7 @@ describe('AuthService demo OTP vehicle flow', () => {
     }
 
     expect(from).not.toHaveBeenCalledWith('cms_otp_challenges');
-    expect(queue.ensureDevDemoAdsIfEmpty).toHaveBeenCalledTimes(2);
+    expect(ensureDevDemoAdsIfEmpty).toHaveBeenCalledTimes(2);
   });
 
   it('rejects an unregistered vehicle before issuing a demo challenge', async () => {
@@ -227,6 +254,126 @@ describe('AuthService demo OTP vehicle flow', () => {
     expect(signInWithOtp).not.toHaveBeenCalled();
   });
 
+  it('uses the fixed OTP locally for any registered Auto Number with an active Admin mapping', async () => {
+    const tables = registeredVehicleRows();
+    const { auth, from, signInWithOtp, ensureDevDemoAdsIfEmpty } =
+      createAuthHarness(
+        {
+          CMS_DEV_AUTH: 'true',
+          CMS_LOCAL_AUTO_NUMBER_AUTH: 'true',
+          CMS_DEMO_VEHICLES: 'KA01AB0001',
+          NODE_ENV: 'development',
+        },
+        tables,
+      );
+
+    const lookup = await auth.lookupAutoNumber('KA02 CD 0002');
+    expect(lookup.autoNumber).toBe('KA02CD0002');
+    expect(lookup.devMode).toBe(true);
+    expect(lookup.localDevelopmentAuth).toBe(true);
+    expect(lookup.maskedMobile).toBe('Demo OTP');
+    expect(from).toHaveBeenCalledWith('vehicle_cms_link');
+
+    const session = await auth.verifyOtp(lookup.challengeId, '123456');
+    expect(session.operator.autoNumber).toBe('KA02CD0002');
+    expect(session.operator.vehicleId).toBe('vehicle-2');
+    expect(session.screen.id).toBe('screen-2');
+    expect(signInWithOtp).not.toHaveBeenCalled();
+    expect(ensureDevDemoAdsIfEmpty).not.toHaveBeenCalled();
+  });
+
+  it('explains that an unknown local Auto Number must be registered and mapped', async () => {
+    const { auth, redis, signInWithOtp } = createAuthHarness(
+      {
+        CMS_DEV_AUTH: 'true',
+        CMS_LOCAL_AUTO_NUMBER_AUTH: 'true',
+        NODE_ENV: 'development',
+      },
+      registeredVehicleRows(),
+    );
+
+    await expect(auth.lookupAutoNumber('KA99ZZ9999')).rejects.toThrow(
+      'This Auto Number is not registered for CMS display. Register it in Admin and complete its CMS screen mapping.',
+    );
+    expect(redis.set).not.toHaveBeenCalled();
+    expect(signInWithOtp).not.toHaveBeenCalled();
+  });
+
+  it('rejects local Auto Numbers without an active Admin device-to-screen mapping before OTP issuance', async () => {
+    const tables = registeredVehicleRows();
+    tables.vehicle_cms_link = [];
+    const { auth, redis } = createAuthHarness(
+      {
+        CMS_DEV_AUTH: 'true',
+        CMS_LOCAL_AUTO_NUMBER_AUTH: 'true',
+        NODE_ENV: 'development',
+      },
+      tables,
+    );
+
+    await expect(auth.lookupAutoNumber('KA01AB0001')).rejects.toThrow(
+      'No active Admin device mapping exists for this Auto Number and screen',
+    );
+    expect(redis.set).not.toHaveBeenCalled();
+  });
+
+  it('rejects a stale Admin vehicle mapping for a local Auto Number', async () => {
+    const tables = registeredVehicleRows();
+    tables.admin_vehicles[0] = {
+      ...tables.admin_vehicles[0],
+      payload: { no: 'KA00XX0000', status: 'Active' },
+    };
+    const { auth, redis } = createAuthHarness(
+      {
+        CMS_DEV_AUTH: 'true',
+        CMS_LOCAL_AUTO_NUMBER_AUTH: 'true',
+        NODE_ENV: 'development',
+      },
+      tables,
+    );
+
+    await expect(auth.lookupAutoNumber('KA01AB0001')).rejects.toThrow(
+      'This Auto Number is not an active Admin vehicle mapped to the CMS screen',
+    );
+    expect(redis.set).not.toHaveBeenCalled();
+  });
+
+  it('does not enable arbitrary Auto Number OTP on Preview deployments', async () => {
+    const { auth } = createAuthHarness(
+      {
+        CMS_DEV_AUTH: 'true',
+        CMS_LOCAL_AUTO_NUMBER_AUTH: 'true',
+        NODE_ENV: 'production',
+        VERCEL_ENV: 'preview',
+      },
+      registeredVehicleRows(),
+    );
+
+    await expect(auth.lookupAutoNumber('KA01AB0001')).rejects.toThrow(
+      'Demo OTP is restricted to the configured demo vehicles',
+    );
+  });
+
+  it('rejects Production sessions for a revoked registered display device', async () => {
+    const tables = registeredVehicleRows();
+    tables.cms_vehicles[0].auto_number = 'KA01AB0000';
+    tables.admin_dm_devices[0].lifecycle_status = 'revoked';
+    const { auth } = createAuthHarness(
+      {
+        CMS_DEMO_AUTH: 'true',
+        NODE_ENV: 'production',
+        VERCEL_ENV: 'production',
+        SUPABASE_SERVICE_ROLE_KEY: 'test-server-key',
+      },
+      tables,
+    );
+    const lookup = await auth.lookupAutoNumber('KA01AB0000');
+
+    await expect(auth.verifyOtp(lookup.challengeId, '123456')).rejects.toThrow(
+      'Registered display device is revoked or inactive',
+    );
+  });
+
   it('supports the temporary Production demo flow without Redis or Supabase SMS', async () => {
     const tables = registeredVehicleRows();
     tables.cms_vehicles[0].auto_number = 'KA01AB0000';
@@ -236,7 +383,7 @@ describe('AuthService demo OTP vehicle flow', () => {
       signInWithOtp,
       from,
       redis,
-      queue,
+      ensureDevDemoAdsIfEmpty,
     } = createAuthHarness(
       {
         CMS_DEMO_AUTH: 'true',
@@ -277,7 +424,7 @@ describe('AuthService demo OTP vehicle flow', () => {
     expect(session.operator.vehicleId).toBe('vehicle-1');
     expect(session.operator.autoNumber).toBe('KA01AB0000');
     expect(session.screen.id).toBe('screen-1');
-    expect(queue.ensureDevDemoAdsIfEmpty).toHaveBeenCalledWith('screen-1');
+    expect(ensureDevDemoAdsIfEmpty).toHaveBeenCalledWith('screen-1');
     const signatureStart = session.accessToken.lastIndexOf('.') + 1;
     const tamperedToken = `${session.accessToken.slice(0, signatureStart)}${
       session.accessToken[signatureStart] === 'A' ? 'B' : 'A'
@@ -394,6 +541,72 @@ describe('AuthService demo OTP vehicle flow', () => {
     expect(redis.set).toHaveBeenCalled();
   });
 
+  it.each([
+    'KA01AB0001',
+    'KA01AB0002',
+    'KA01AB0003',
+    'KA01AB0004',
+  ])(
+    'keeps Production demo OTP restricted to KA01AB0000 for %s and uses the existing SMS path',
+    async (autoNumber) => {
+      const tables = registeredVehicleRows();
+      tables.cms_vehicles[0].auto_number = autoNumber;
+      tables.cms_vehicles[0].registered_mobile = '9876543210';
+      tables.cms_vehicles[0].mobile_e164 = '+919876543210';
+      tables.vehicle_cms_link[0].auto_number_norm = autoNumber;
+      tables.admin_vehicles[0].payload = {
+        no: autoNumber,
+        status: 'Active',
+      };
+      tables.admin_dm_devices[0].vehicle_no = autoNumber;
+      const {
+        auth,
+        signInWithOtp,
+        verifyOtp,
+        ensureDevDemoAdsIfEmpty,
+      } = createAuthHarness(
+        {
+          CMS_DEMO_AUTH: 'true',
+          NODE_ENV: 'production',
+          VERCEL_ENV: 'production',
+          SUPABASE_SERVICE_ROLE_KEY: 'test-server-key',
+        },
+        tables,
+      );
+
+      const lookup = await auth.lookupAutoNumber(autoNumber);
+      expect(lookup.devMode).toBe(false);
+      expect(lookup.maskedMobile).not.toBe('Demo OTP');
+      expect(JSON.stringify(lookup)).not.toContain('123456');
+      expect(signInWithOtp).toHaveBeenCalledWith({ phone: '+919876543210' });
+
+      await expect(
+        auth.verifyOtp(lookup.challengeId, '123456'),
+      ).rejects.toThrow('Invalid or expired OTP');
+      expect(verifyOtp).toHaveBeenCalledWith({
+        phone: '+919876543210',
+        token: '123456',
+        type: 'sms',
+      });
+
+      verifyOtp.mockResolvedValue({
+        data: {
+          session: {
+            access_token: 'sms-session-token',
+            refresh_token: 'sms-refresh-token',
+            expires_in: 3600,
+            user: { id: 'auth-user-1' },
+          },
+        },
+        error: null,
+      });
+      const session = await auth.verifyOtp(lookup.challengeId, '654321');
+
+      expect(session.operator.autoNumber).toBe(autoNumber);
+      expect(ensureDevDemoAdsIfEmpty).toHaveBeenCalledWith('screen-1');
+    },
+  );
+
   it('does not use Redis or development seeds when the demo plate is unregistered', async () => {
     const { auth, redis, signInWithOtp } = createAuthHarness(
       {
@@ -418,6 +631,7 @@ describe('AuthService demo OTP vehicle flow', () => {
     const { auth, signInWithOtp } = createAuthHarness(
       {
         CMS_DEV_AUTH: 'true',
+        CMS_LOCAL_AUTO_NUMBER_AUTH: 'true',
         NODE_ENV: 'production',
         VERCEL_ENV: 'production',
       },
@@ -545,6 +759,7 @@ describe('AuthService demo OTP vehicle flow', () => {
     const { auth, verifyOtp, redis } = createAuthHarness(
       {
         CMS_DEV_AUTH: 'true',
+        CMS_LOCAL_AUTO_NUMBER_AUTH: 'true',
         NODE_ENV: 'production',
         VERCEL_ENV: 'production',
       },

@@ -64,6 +64,24 @@ describe('QueueService (memory / no fake history)', () => {
     expect(second.queued.map((q) => q.title)).toEqual(['Queued-1', 'Queued-2']);
   });
 
+  it('does not enqueue the same campaign twice during a delivery retry', async () => {
+    const svc = makeService();
+    const first = await svc.enqueue(SCREEN_A, [
+      { title: 'Campaign ad', externalAdId: 'campaign-123' },
+    ]);
+    const playingId = first.playing!.id;
+
+    const retry = await svc.enqueue(SCREEN_A, [
+      { title: 'Campaign ad', externalAdId: 'campaign-123' },
+    ]);
+    const snapshot = await svc.snapshot(SCREEN_A);
+
+    expect(retry.enqueued).toHaveLength(1);
+    expect(retry.enqueued[0].id).toBe(playingId);
+    expect(snapshot.currentlyPlaying?.id).toBe(playingId);
+    expect(snapshot.upcomingQueue).toHaveLength(0);
+  });
+
   it('plays sequentially: complete → next QUEUED becomes PLAYING', async () => {
     const svc = makeService();
     const enq = await svc.enqueue(SCREEN_A, [
@@ -93,6 +111,45 @@ describe('QueueService (memory / no fake history)', () => {
     expect((await svc.snapshot(SCREEN_A)).playbackHistory).toHaveLength(3);
   });
 
+  it('records actual playback start and accepts duplicate completion acknowledgements', async () => {
+    const svc = makeService();
+    const enq = await svc.enqueue(SCREEN_A, [
+      { title: 'Image campaign' },
+      { title: 'Video campaign' },
+    ]);
+    const startedAt = new Date(Date.now() - 5_000).toISOString();
+    const endedAt = new Date().toISOString();
+
+    await svc.startPlaying(SCREEN_A, enq.playing!.id, startedAt);
+    expect((await svc.snapshot(SCREEN_A)).currentlyPlaying?.startedAt).toBe(
+      startedAt,
+    );
+    await svc.completePlaying(SCREEN_A, enq.playing!.id, endedAt);
+    await svc.completePlaying(SCREEN_A, enq.playing!.id, endedAt);
+
+    const snapshot = await svc.snapshot(SCREEN_A);
+    expect(snapshot.currentlyPlaying?.title).toBe('Video campaign');
+    expect(snapshot.playbackHistory).toHaveLength(1);
+    expect(snapshot.playbackHistory[0].startedAt).toBe(startedAt);
+    expect(snapshot.playbackHistory[0].endedAt).toBe(endedAt);
+  });
+
+  it('does not promote expired campaign ads from the offline queue', async () => {
+    const svc = makeService();
+    await svc.enqueue(SCREEN_A, [
+      {
+        title: 'Expired campaign',
+        expiresAt: new Date(Date.now() - 1_000).toISOString(),
+      },
+      { title: 'Active campaign' },
+    ]);
+
+    const snapshot = await svc.snapshot(SCREEN_A);
+    const items = memoryQueueStore.listByScreen(SCREEN_A);
+    expect(snapshot.currentlyPlaying?.title).toBe('Active campaign');
+    expect(items[0].status).toBe('CANCELLED');
+  });
+
   it('enforces one PLAYING per screen (complete wrong id fails)', async () => {
     const svc = makeService();
     const enq = await svc.enqueue(SCREEN_A, [
@@ -100,9 +157,9 @@ describe('QueueService (memory / no fake history)', () => {
       { title: 'Two' },
     ]);
     const queuedId = enq.queued[0].id;
-    await expect(svc.completePlaying(SCREEN_A, queuedId)).rejects.toBeInstanceOf(
-      ConflictException,
-    );
+    await expect(
+      svc.completePlaying(SCREEN_A, queuedId),
+    ).rejects.toBeInstanceOf(ConflictException);
     expect((await svc.snapshot(SCREEN_A)).currentlyPlaying?.title).toBe('One');
   });
 

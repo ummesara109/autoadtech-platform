@@ -76,10 +76,14 @@ export function LoginPage() {
           </Button>
         </form>
         <p className="mt-6 text-xs text-[var(--cms-muted)]">
-          Local dev seed: <code>KA01AB1234</code> or <code>KA02CD5678</code>.
-          Temporary Production testing is limited to <code>KA01AB0000</code>;
-          disable CMS_DEMO_AUTH in Vercel and redeploy before live drivers use
-          the app.
+          Local sample seed: <code>KA01AB1234</code> or <code>KA02CD5678</code>.
+          To test registered fleet vehicles locally, set{' '}
+          <code>CMS_LOCAL_AUTO_NUMBER_AUTH=true</code> and{' '}
+          <code>CMS_DEV_AUTH=true</code>; the vehicle must already have an
+          active Admin device and mapped CMS screen. No vehicle or screen is
+          created automatically. Temporary Production testing remains limited
+          to <code>KA01AB0000</code>; disable CMS_DEMO_AUTH in Vercel and
+          redeploy before live drivers use the app.
         </p>
       </Panel>
     </Shell>

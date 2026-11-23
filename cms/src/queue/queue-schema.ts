@@ -11,6 +11,7 @@ export type CmsAdQueueSchema = {
   hasStartedAt: boolean;
   hasEndedAt: boolean;
   hasFailReason: boolean;
+  hasExpiresAt: boolean;
 };
 
 const statusMap = {
@@ -54,8 +55,7 @@ export function inferMediaUrl(row: {
   const adv = String(row.advertiser || '');
   const hit = DEV_DEMO_ADS.find(
     (a) =>
-      a.title === title ||
-      a.externalAdId === ext ||
+      a.title === title || a.externalAdId === ext ||
       adv.includes(a.mediaUrl),
   );
   if (hit) return hit.mediaUrl;
@@ -83,6 +83,7 @@ export async function detectCmsAdQueueSchema(
   const hasStartedAt = await probe('started_at');
   const hasEndedAt = await probe('ended_at');
   const hasFailReason = await probe('fail_reason');
+  const hasExpiresAt = await probe('expires_at');
 
   // Uppercase QUEUED only works after migration 003; milestone1 uses lowercase.
   let statusMode: QueueStatusMode = 'lower';
@@ -109,6 +110,7 @@ export async function detectCmsAdQueueSchema(
     hasStartedAt,
     hasEndedAt,
     hasFailReason,
+    hasExpiresAt,
   };
   return cached;
 }

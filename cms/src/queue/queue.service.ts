@@ -18,6 +18,14 @@ import {
 import { memoryQueueStore, MemoryQueueStore } from './queue.store';
 import type { EnqueueAdInput, QueueItem } from './queue.types';
 
+function asRecordArray(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (row): row is Record<string, unknown> =>
+      typeof row === 'object' && row !== null && !Array.isArray(row),
+  );
+}
+
 @Injectable()
 export class QueueService {
   private readonly logger = new Logger(QueueService.name);
@@ -29,19 +37,14 @@ export class QueueService {
   ) {}
 
   /**
-   * CMS_DEV_AUTH / local: if screen has no PLAYING and no QUEUED,
-   * enqueue the two demo MP4s (first promotes to PLAYING). Never interrupts PLAYING.
-   * Works for in-memory store and Supabase (Admin-provisioned screens).
-   * Callers must gate on CMS_DEV_AUTH — this method does not invent GPS.
-   * Returns true when ads were seeded.
+   * If a screen has no PLAYING or QUEUED item, enqueue the existing demo MP4
+   * rotation (the first item starts immediately). Callers restrict this to
+   * local demo auth or the designated demo-playback vehicles.
    */
   async ensureDevDemoAdsIfEmpty(screenId: string): Promise<boolean> {
     if (this.supabase.isConfigured) {
       const snap = await this.snapshotSupabase(screenId);
-      if (
-        snap.currentlyPlaying ||
-        (snap.upcomingQueue?.length ?? 0) > 0
-      ) {
+      if (snap.currentlyPlaying || (snap.upcomingQueue?.length ?? 0) > 0) {
         return false;
       }
     } else {
@@ -57,7 +60,7 @@ export class QueueService {
       externalAdId: ad.externalAdId,
     }));
     this.logger.log(
-      `Local demo seed for screen ${screenId}: ${ads.map((a) => a.mediaUrl).join(' → ')}`,
+      `Demo queue seed for screen ${screenId}: ${ads.map((a) => a.mediaUrl).join(' → ')}`,
     );
     await this.enqueue(screenId, ads);
     return true;
@@ -94,7 +97,8 @@ export class QueueService {
     opts?: { vehicleId?: string },
   ) {
     if (!ads.length) throw new BadRequestException('No ads to enqueue');
-    const vehicleId = opts?.vehicleId ?? (await this.resolveScreenVehicle(screenId));
+    const vehicleId =
+      opts?.vehicleId ?? (await this.resolveScreenVehicle(screenId));
     if (opts?.vehicleId && opts.vehicleId !== vehicleId) {
       throw new BadRequestException('vehicleId does not match screen');
     }
@@ -103,13 +107,38 @@ export class QueueService {
       ? await this.enqueueSupabase(screenId, vehicleId, ads)
       : await this.memory.withScreenLock(screenId, async () => {
           const playingBefore = this.memory.playing(screenId);
-          const created = this.memory.append(screenId, vehicleId, ads);
+          const knownExternalIds = new Set(
+            this.memory
+              .listByScreen(screenId)
+              .map((item) => item.externalAdId)
+              .filter((id): id is string => !!id),
+          );
+          const uniqueAds = ads.filter((ad) => {
+            if (!ad.externalAdId) return true;
+            if (knownExternalIds.has(ad.externalAdId)) return false;
+            knownExternalIds.add(ad.externalAdId);
+            return true;
+          });
+          const created = this.memory.append(screenId, vehicleId, uniqueAds);
+          const createdIds = new Set(
+            created
+              .map((item) => item.externalAdId)
+              .filter((id): id is string => !!id),
+          );
+          const alreadyEnqueued = this.memory
+            .listByScreen(screenId)
+            .filter(
+              (item) =>
+                !!item.externalAdId &&
+                ads.some((ad) => ad.externalAdId === item.externalAdId) &&
+                !createdIds.has(item.externalAdId),
+            );
           // Never interrupt PLAYING — only start if idle
           if (!playingBefore) {
             await this.promoteNextLocked(screenId);
           }
           return {
-            enqueued: created,
+            enqueued: [...created, ...alreadyEnqueued],
             playing: this.memory.playing(screenId),
             queued: this.memory.queued(screenId),
             interruptedPlaying: false,
@@ -124,6 +153,7 @@ export class QueueService {
     if (this.supabase.isConfigured) {
       return this.snapshotSupabase(screenId);
     }
+    this.expireQueuedMemory(screenId);
     return {
       currentlyPlaying: this.mapPlaying(this.memory.playing(screenId)),
       upcomingQueue: this.memory.queued(screenId).map((i) => this.mapQueued(i)),
@@ -138,19 +168,62 @@ export class QueueService {
     };
   }
 
+  async startPlaying(
+    screenId: string,
+    queueItemId: string,
+    occurredAt?: string,
+  ) {
+    const startedAt = this.playbackTimestamp(occurredAt);
+    const result = this.supabase.isConfigured
+      ? await this.startSupabase(screenId, queueItemId, startedAt)
+      : await this.memory.withScreenLock(screenId, async () => {
+          const item = this.memory.playing(screenId);
+          if (!item || item.id !== queueItemId) {
+            const existing = this.memory
+              .listByScreen(screenId)
+              .find((row) => row.id === queueItemId);
+            if (existing?.startedAt) {
+              return { startedId: queueItemId, startedAt: existing.startedAt };
+            }
+            throw new ConflictException('queueItemId is not the PLAYING item');
+          }
+          const actualStartedAt = item.startedAt ?? startedAt;
+          this.memory.setStatus(queueItemId, 'PLAYING', {
+            startedAt: actualStartedAt,
+          });
+          return { startedId: queueItemId, startedAt: actualStartedAt };
+        });
+    await this.invalidateDashboard(screenId);
+    return result;
+  }
+
   /**
    * Player / MQTT worker ACK: mark current PLAYING complete and advance.
    * Does not invent history for ads that never played.
    */
-  async completePlaying(screenId: string, queueItemId: string) {
+  async completePlaying(
+    screenId: string,
+    queueItemId: string,
+    occurredAt?: string,
+  ) {
+    const endedAt = this.playbackTimestamp(occurredAt);
     const result = this.supabase.isConfigured
-      ? await this.completeSupabase(screenId, queueItemId)
+      ? await this.completeSupabase(screenId, queueItemId, endedAt)
       : await this.memory.withScreenLock(screenId, async () => {
           const playing = this.memory.playing(screenId);
           if (!playing || playing.id !== queueItemId) {
+            const existing = this.memory
+              .listByScreen(screenId)
+              .find((item) => item.id === queueItemId);
+            if (existing?.status === 'COMPLETED') {
+              return {
+                completedId: queueItemId,
+                playing: this.memory.playing(screenId),
+                queued: this.memory.queued(screenId),
+              };
+            }
             throw new ConflictException('queueItemId is not the PLAYING item');
           }
-          const endedAt = new Date().toISOString();
           this.memory.setStatus(queueItemId, 'COMPLETED', { endedAt });
           this.memory.addHistory({
             screenId,
@@ -172,15 +245,30 @@ export class QueueService {
     return result;
   }
 
-  async failPlaying(screenId: string, queueItemId: string, reason?: string) {
+  async failPlaying(
+    screenId: string,
+    queueItemId: string,
+    reason?: string,
+    occurredAt?: string,
+  ) {
+    const endedAt = this.playbackTimestamp(occurredAt);
     const result = this.supabase.isConfigured
-      ? await this.failSupabase(screenId, queueItemId, reason)
+      ? await this.failSupabase(screenId, queueItemId, reason, endedAt)
       : await this.memory.withScreenLock(screenId, async () => {
           const playing = this.memory.playing(screenId);
           if (!playing || playing.id !== queueItemId) {
+            const existing = this.memory
+              .listByScreen(screenId)
+              .find((item) => item.id === queueItemId);
+            if (existing?.status === 'FAILED') {
+              return {
+                failedId: queueItemId,
+                playing: this.memory.playing(screenId),
+                queued: this.memory.queued(screenId),
+              };
+            }
             throw new ConflictException('queueItemId is not the PLAYING item');
           }
-          const endedAt = new Date().toISOString();
           this.memory.setStatus(queueItemId, 'FAILED', {
             endedAt,
             failReason: reason ?? 'failed',
@@ -213,8 +301,11 @@ export class QueueService {
             .listByScreen(screenId)
             .find((i) => i.id === queueItemId);
           if (!item) throw new NotFoundException('Queue item not found');
+          if (item.status === 'CANCELLED') {
+            return { cancelledId: queueItemId };
+          }
           if (item.status !== 'QUEUED') {
-            throw new BadRequestException('Only QUEUED items can be cancelled');
+            throw new ConflictException('Only QUEUED items can be cancelled');
           }
           this.memory.setStatus(queueItemId, 'CANCELLED', {
             endedAt: new Date().toISOString(),
@@ -225,17 +316,93 @@ export class QueueService {
     return result;
   }
 
+  async recordPlayerHeartbeat(
+    screenId: string,
+    input: {
+      queueItemId?: string;
+      status: 'playing' | 'idle' | 'error';
+      playbackError?: string;
+    },
+  ) {
+    const syncedAt = new Date().toISOString();
+    if (!this.supabase.isConfigured) {
+      return { ok: true, lastSeenAt: syncedAt, lastSyncAt: syncedAt };
+    }
+
+    const snapshot = await this.snapshot(screenId);
+    const playing = snapshot.currentlyPlaying;
+    const screenStatus =
+      input.status === 'error' ? 'error' : playing ? 'playing' : 'idle';
+    const { error } = await this.supabase.client
+      .from('cms_device_status')
+      .upsert(
+        {
+          screen_id: screenId,
+          online: true,
+          last_seen_at: syncedAt,
+          screen_status: screenStatus,
+          current_queue_item_id: playing?.id ?? null,
+          current_campaign_id: playing?.externalAdId ?? null,
+          ...(input.playbackError
+            ? { last_playback_error: input.playbackError }
+            : {}),
+          last_sync_at: syncedAt,
+          updated_at: syncedAt,
+        },
+        { onConflict: 'screen_id' },
+      );
+    if (error) {
+      throw new BadRequestException(
+        `Display heartbeat could not be saved: ${error.message}`,
+      );
+    }
+    return {
+      ok: true,
+      lastSeenAt: syncedAt,
+      lastSyncAt: syncedAt,
+      currentCampaignId: playing?.externalAdId ?? null,
+    };
+  }
+
   /** Test-only reset of memory store. */
   resetMemory() {
     this.memory.reset();
   }
 
   private async promoteNextLocked(screenId: string) {
+    this.expireQueuedMemory(screenId);
     if (this.memory.playing(screenId)) return null;
     const next = this.memory.queued(screenId)[0];
     if (!next) return null;
-    const startedAt = new Date().toISOString();
-    return this.memory.setStatus(next.id, 'PLAYING', { startedAt });
+    return this.memory.setStatus(next.id, 'PLAYING');
+  }
+
+  private expireQueuedMemory(screenId: string) {
+    const now = Date.now();
+    for (const item of this.memory.queued(screenId)) {
+      if (item.expiresAt && Date.parse(item.expiresAt) <= now) {
+        this.memory.setStatus(item.id, 'CANCELLED', {
+          endedAt: new Date(now).toISOString(),
+          failReason: 'campaign_expired',
+        });
+      }
+    }
+  }
+
+  private playbackTimestamp(value?: string) {
+    if (!value) return new Date().toISOString();
+    const timestamp = Date.parse(value);
+    const now = Date.now();
+    if (
+      !Number.isFinite(timestamp) ||
+      timestamp > now + 2 * 60_000 ||
+      timestamp < now - 7 * 24 * 60 * 60_000
+    ) {
+      throw new BadRequestException(
+        'Playback timestamp is outside the allowed range',
+      );
+    }
+    return new Date(timestamp).toISOString();
   }
 
   private mapPlaying(item: QueueItem | null) {
@@ -247,6 +414,7 @@ export class QueueService {
       durationSec: item.durationSec,
       status: item.status,
       startedAt: item.startedAt ?? null,
+      expiresAt: item.expiresAt ?? null,
       mediaUrl: item.mediaUrl ?? null,
       externalAdId: item.externalAdId ?? null,
     };
@@ -261,6 +429,7 @@ export class QueueService {
       position: item.position,
       status: item.status,
       mediaUrl: item.mediaUrl ?? null,
+      expiresAt: item.expiresAt ?? null,
     };
   }
 
@@ -298,6 +467,7 @@ export class QueueService {
     if (schema.hasVehicleId) row.vehicle_id = vehicleId;
     if (schema.hasExternalAdId) row.external_ad_id = ad.externalAdId ?? null;
     if (schema.hasMediaUrl) row.media_url = media;
+    if (schema.hasExpiresAt) row.expires_at = ad.expiresAt ?? null;
     return row;
   }
 
@@ -310,6 +480,11 @@ export class QueueService {
     const schema = await this.queueSchema();
     const playingStatus = statusValue(schema, 'playing');
     const queuedStatus = statusValue(schema, 'queued');
+    if (ads.some((ad) => ad.expiresAt) && !schema.hasExpiresAt) {
+      throw new BadRequestException(
+        'CMS campaign expiry migration is required before campaign delivery.',
+      );
+    }
 
     const { data: playingRows } = await client
       .from('cms_ad_queue')
@@ -319,16 +494,60 @@ export class QueueService {
       .limit(1);
     const hadPlaying = (playingRows?.length ?? 0) > 0;
 
-    const { data: maxRow } = await client
+    const externalIds = [
+      ...new Set(
+        ads.map((ad) => ad.externalAdId).filter((id): id is string => !!id),
+      ),
+    ];
+    let existingRows: Record<string, unknown>[] = [];
+    if (externalIds.length) {
+      const { data, error: existingError } = await client
+        .from('cms_ad_queue')
+        .select('*')
+        .eq('screen_id', screenId)
+        .in('external_ad_id', externalIds);
+      if (existingError) {
+        this.logger.error(existingError.message);
+        throw new BadRequestException(
+          `Queue idempotency lookup failed: ${existingError.message}`,
+        );
+      }
+      existingRows = asRecordArray(data);
+    }
+    const existingIds = new Set(
+      existingRows
+        .map((row) => row.external_ad_id)
+        .filter((id): id is string => typeof id === 'string'),
+    );
+    const newAds = ads.filter(
+      (ad) => !ad.externalAdId || !existingIds.has(ad.externalAdId),
+    );
+
+    if (newAds.length === 0) {
+      const snap = await this.snapshotSupabase(screenId);
+      return {
+        enqueued: existingRows.map((row) => this.rowToItem(row)),
+        playing: snap.currentlyPlaying,
+        queued: snap.upcomingQueue,
+        interruptedPlaying: false,
+      };
+    }
+
+    const { data: maxRow, error: maxError } = await client
       .from('cms_ad_queue')
       .select('position')
       .eq('screen_id', screenId)
       .order('position', { ascending: false })
       .limit(1)
       .maybeSingle();
+    if (maxError) {
+      throw new BadRequestException(
+        `Queue position lookup failed: ${maxError.message}`,
+      );
+    }
     let pos = (maxRow?.position as number | undefined) ?? 0;
 
-    const rows = ads.map((ad) => {
+    const rows = newAds.map((ad) => {
       pos += 1;
       return this.buildQueueInsertRow(
         schema,
@@ -345,6 +564,33 @@ export class QueueService {
       .insert(rows)
       .select('*');
     if (error) {
+      if (error.code === '23505' && externalIds.length) {
+        const { data: racedRows, error: raceError } = await client
+          .from('cms_ad_queue')
+          .select('*')
+          .eq('screen_id', screenId)
+          .in('external_ad_id', externalIds);
+        const raceRecords = asRecordArray(racedRows);
+        const raceExternalIds = new Set(
+          raceRecords
+            .map((row) => row.external_ad_id)
+            .filter((id): id is string => typeof id === 'string'),
+        );
+        if (
+          !raceError &&
+          newAds.every(
+            (ad) => !!ad.externalAdId && raceExternalIds.has(ad.externalAdId),
+          )
+        ) {
+          const snap = await this.snapshotSupabase(screenId);
+          return {
+            enqueued: raceRecords.map((row) => this.rowToItem(row)),
+            playing: snap.currentlyPlaying,
+            queued: snap.upcomingQueue,
+            interruptedPlaying: false,
+          };
+        }
+      }
       this.logger.error(error.message);
       throw new BadRequestException(`Enqueue failed: ${error.message}`);
     }
@@ -355,7 +601,7 @@ export class QueueService {
 
     const snap = await this.snapshotSupabase(screenId);
     return {
-      enqueued: (inserted ?? []).map((r) => this.rowToItem(r)),
+      enqueued: asRecordArray(inserted).map((row) => this.rowToItem(row)),
       playing: snap.currentlyPlaying,
       queued: snap.upcomingQueue,
       interruptedPlaying: false,
@@ -367,6 +613,7 @@ export class QueueService {
     const schema = await this.queueSchema();
     const playingStatus = statusValue(schema, 'playing');
     const queuedStatus = statusValue(schema, 'queued');
+    await this.expireQueuedSupabase(screenId, schema);
 
     const { data: playing } = await client
       .from('cms_ad_queue')
@@ -387,7 +634,6 @@ export class QueueService {
     if (!next) return null;
 
     const patch: Record<string, unknown> = { status: playingStatus };
-    if (schema.hasStartedAt) patch.started_at = new Date().toISOString();
 
     const { error } = await client
       .from('cms_ad_queue')
@@ -401,11 +647,87 @@ export class QueueService {
     return next.id as string;
   }
 
+  private async startSupabase(
+    screenId: string,
+    queueItemId: string,
+    startedAt: string,
+  ) {
+    const client = this.supabase.client;
+    const schema = await this.queueSchema();
+    if (!schema.hasStartedAt) {
+      throw new BadRequestException(
+        'CMS playback timestamp migration is required before playback.',
+      );
+    }
+
+    const playingStatus = statusValue(schema, 'playing');
+    const { data, error } = await client
+      .from('cms_ad_queue')
+      .update({ started_at: startedAt })
+      .eq('id', queueItemId)
+      .eq('screen_id', screenId)
+      .eq('status', playingStatus)
+      .is('started_at', null)
+      .select('id, started_at')
+      .maybeSingle();
+    if (error) {
+      throw new BadRequestException(
+        `Playback start could not be recorded: ${error.message}`,
+      );
+    }
+    if (data) {
+      return { startedId: queueItemId, startedAt: data.started_at as string };
+    }
+
+    const { data: existing, error: lookupError } = await client
+      .from('cms_ad_queue')
+      .select('status, started_at')
+      .eq('id', queueItemId)
+      .eq('screen_id', screenId)
+      .maybeSingle();
+    if (lookupError) {
+      throw new BadRequestException(
+        `Playback start lookup failed: ${lookupError.message}`,
+      );
+    }
+    if (existing?.started_at) {
+      return {
+        startedId: queueItemId,
+        startedAt: existing.started_at as string,
+      };
+    }
+    throw new ConflictException('queueItemId is not the PLAYING item');
+  }
+
+  private async expireQueuedSupabase(
+    screenId: string,
+    schema: CmsAdQueueSchema,
+  ) {
+    if (!schema.hasExpiresAt) return;
+    const patch: Record<string, unknown> = {
+      status: statusValue(schema, 'cancelled'),
+    };
+    if (schema.hasEndedAt) patch.ended_at = new Date().toISOString();
+    if (schema.hasFailReason) patch.fail_reason = 'campaign_expired';
+    const { error } = await this.supabase.client
+      .from('cms_ad_queue')
+      .update(patch)
+      .eq('screen_id', screenId)
+      .eq('status', statusValue(schema, 'queued'))
+      .lte('expires_at', new Date().toISOString());
+    if (error) {
+      throw new BadRequestException(
+        `Expired campaign queue items could not be cancelled: ${error.message}`,
+      );
+    }
+  }
+
   private async snapshotSupabase(screenId: string) {
     const client = this.supabase.client;
     const schema = await this.queueSchema();
     const playingStatus = statusValue(schema, 'playing');
     const queuedStatus = statusValue(schema, 'queued');
+    await this.expireQueuedSupabase(screenId, schema);
 
     const { data: playing } = await client
       .from('cms_ad_queue')
@@ -438,6 +760,7 @@ export class QueueService {
             startedAt: playing.started_at ?? null,
             mediaUrl: inferMediaUrl(playing),
             externalAdId: playing.external_ad_id ?? null,
+            expiresAt: playing.expires_at ?? null,
           }
         : null,
       upcomingQueue: (queued ?? []).map((row) => ({
@@ -448,6 +771,7 @@ export class QueueService {
         position: row.position,
         status: row.status,
         mediaUrl: inferMediaUrl(row),
+        expiresAt: row.expires_at ?? null,
       })),
       playbackHistory: (history ?? []).map((row) => ({
         id: row.id,
@@ -460,26 +784,63 @@ export class QueueService {
     };
   }
 
-  private async completeSupabase(screenId: string, queueItemId: string) {
+  private async completeSupabase(
+    screenId: string,
+    queueItemId: string,
+    endedAt: string,
+  ) {
     const client = this.supabase.client;
     const schema = await this.queueSchema();
     const playingStatus = statusValue(schema, 'playing');
     const completedStatus = statusValue(schema, 'completed');
 
-    const { data: playing } = await client
+    const { data: playing, error: lookupError } = await client
       .from('cms_ad_queue')
       .select('*')
       .eq('id', queueItemId)
       .eq('screen_id', screenId)
-      .eq('status', playingStatus)
       .maybeSingle();
+    if (lookupError) {
+      throw new BadRequestException(
+        `Playback completion lookup failed: ${lookupError.message}`,
+      );
+    }
     if (!playing) {
       throw new ConflictException('queueItemId is not the PLAYING item');
     }
-    const endedAt = new Date().toISOString();
+    if (playing.status === completedStatus) {
+      return this.snapshotSupabase(screenId);
+    }
+    if (playing.status !== playingStatus) {
+      throw new ConflictException('queueItemId is not the PLAYING item');
+    }
     const patch: Record<string, unknown> = { status: completedStatus };
     if (schema.hasEndedAt) patch.ended_at = endedAt;
-    await client.from('cms_ad_queue').update(patch).eq('id', queueItemId);
+    const { data: completed, error: updateError } = await client
+      .from('cms_ad_queue')
+      .update(patch)
+      .eq('id', queueItemId)
+      .eq('screen_id', screenId)
+      .eq('status', playingStatus)
+      .select('*')
+      .maybeSingle();
+    if (updateError) {
+      throw new BadRequestException(
+        `Playback completion could not be saved: ${updateError.message}`,
+      );
+    }
+    if (!completed) {
+      const { data: current } = await client
+        .from('cms_ad_queue')
+        .select('status')
+        .eq('id', queueItemId)
+        .eq('screen_id', screenId)
+        .maybeSingle();
+      if (current?.status === completedStatus) {
+        return this.snapshotSupabase(screenId);
+      }
+      throw new ConflictException('queueItemId is not the PLAYING item');
+    }
 
     const hist: Record<string, unknown> = {
       screen_id: screenId,
@@ -513,27 +874,61 @@ export class QueueService {
     screenId: string,
     queueItemId: string,
     reason?: string,
+    endedAt = new Date().toISOString(),
   ) {
     const client = this.supabase.client;
     const schema = await this.queueSchema();
     const playingStatus = statusValue(schema, 'playing');
     const failedStatus = statusValue(schema, 'failed');
 
-    const { data: playing } = await client
+    const { data: playing, error: lookupError } = await client
       .from('cms_ad_queue')
       .select('*')
       .eq('id', queueItemId)
       .eq('screen_id', screenId)
-      .eq('status', playingStatus)
       .maybeSingle();
+    if (lookupError) {
+      throw new BadRequestException(
+        `Playback failure lookup failed: ${lookupError.message}`,
+      );
+    }
     if (!playing) {
       throw new ConflictException('queueItemId is not the PLAYING item');
     }
-    const endedAt = new Date().toISOString();
+    if (playing.status === failedStatus) {
+      return this.snapshotSupabase(screenId);
+    }
+    if (playing.status !== playingStatus) {
+      throw new ConflictException('queueItemId is not the PLAYING item');
+    }
     const patch: Record<string, unknown> = { status: failedStatus };
     if (schema.hasEndedAt) patch.ended_at = endedAt;
     if (schema.hasFailReason) patch.fail_reason = reason ?? 'failed';
-    await client.from('cms_ad_queue').update(patch).eq('id', queueItemId);
+    const { data: failed, error: updateError } = await client
+      .from('cms_ad_queue')
+      .update(patch)
+      .eq('id', queueItemId)
+      .eq('screen_id', screenId)
+      .eq('status', playingStatus)
+      .select('*')
+      .maybeSingle();
+    if (updateError) {
+      throw new BadRequestException(
+        `Playback failure could not be saved: ${updateError.message}`,
+      );
+    }
+    if (!failed) {
+      const { data: current } = await client
+        .from('cms_ad_queue')
+        .select('status')
+        .eq('id', queueItemId)
+        .eq('screen_id', screenId)
+        .maybeSingle();
+      if (current?.status === failedStatus) {
+        return this.snapshotSupabase(screenId);
+      }
+      throw new ConflictException('queueItemId is not the PLAYING item');
+    }
 
     const { error: histErr } = await client.from('cms_playback_history').insert({
       screen_id: screenId,
@@ -562,9 +957,28 @@ export class QueueService {
     const schema = await this.queueSchema();
     const queuedStatus = statusValue(schema, 'queued');
     const cancelledStatus = statusValue(schema, 'cancelled');
+    const { data: item, error: lookupError } = await client
+      .from('cms_ad_queue')
+      .select('id, status')
+      .eq('id', queueItemId)
+      .eq('screen_id', screenId)
+      .maybeSingle();
+    if (lookupError) {
+      throw new BadRequestException(
+        `Queue cancellation lookup failed: ${lookupError.message}`,
+      );
+    }
+    if (!item) throw new NotFoundException('Queue item not found');
+    if (item.status === cancelledStatus) {
+      return { cancelledId: queueItemId, status: cancelledStatus };
+    }
+    if (item.status !== queuedStatus) {
+      return { cancelledId: null, status: item.status };
+    }
 
     const patch: Record<string, unknown> = { status: cancelledStatus };
     if (schema.hasEndedAt) patch.ended_at = new Date().toISOString();
+    if (schema.hasFailReason) patch.fail_reason = 'campaign_cancelled';
 
     const { data, error } = await client
       .from('cms_ad_queue')
@@ -572,12 +986,32 @@ export class QueueService {
       .eq('id', queueItemId)
       .eq('screen_id', screenId)
       .eq('status', queuedStatus)
-      .select('id')
+      .select('id, status')
       .maybeSingle();
-    if (error || !data) {
-      throw new BadRequestException('Only QUEUED items can be cancelled');
+    if (error) {
+      throw new BadRequestException(
+        `Queue item could not be cancelled: ${error.message}`,
+      );
     }
-    return { cancelledId: data.id };
+    if (data) {
+      return { cancelledId: data.id, status: data.status };
+    }
+    const { data: current, error: currentError } = await client
+      .from('cms_ad_queue')
+      .select('status')
+      .eq('id', queueItemId)
+      .eq('screen_id', screenId)
+      .maybeSingle();
+    if (currentError) {
+      throw new BadRequestException(
+        `Queue cancellation status lookup failed: ${currentError.message}`,
+      );
+    }
+    if (!current) throw new NotFoundException('Queue item not found');
+    return {
+      cancelledId: current.status === cancelledStatus ? queueItemId : null,
+      status: current.status,
+    };
   }
 
   private rowToItem(row: Record<string, unknown>): QueueItem {
@@ -591,6 +1025,7 @@ export class QueueService {
       position: (row.position as number) ?? 0,
       status: row.status as QueueItem['status'],
       externalAdId: (row.external_ad_id as string) ?? null,
+      expiresAt: (row.expires_at as string) ?? null,
       mediaUrl: inferMediaUrl({
         media_url: row.media_url as string | null,
         title: row.title as string | null,

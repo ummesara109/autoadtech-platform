@@ -54,7 +54,11 @@ Phone GPS / Live Monitoring remains separate (`/api/cms/gps`, `/api/live`).
 
 For local seeded testing, set `CMS_DEV_AUTH=true` in both `admin/.env` and `cms/.env`, then restart both servers. For temporary Production testing of only `KA01AB0000`, set `CMS_DEMO_AUTH=true` and `CMS_DEV_AUTH=false` in both Vercel projects and redeploy.
 
-Set `SUPABASE_URL` and either `SUPABASE_SERVICE_ROLE_KEY` or `SUPABASE_SECRET_KEY` server-side in both Vercel projects, pointing to the same Supabase project. Never expose the secret key through a `VITE_*` variable. Keep `ADMIN_GPS_URL` and `CMS_GPS_INGEST_KEY` configured for the existing CMS-to-Admin GPS forwarding, and apply the existing CMS vehicle/location and Admin GPS migrations to that project.
+Set `SUPABASE_URL` and either `SUPABASE_SERVICE_ROLE_KEY` or `SUPABASE_SECRET_KEY` server-side in both Vercel projects, pointing to the same Supabase project. Never expose the secret key through a `VITE_*` variable. Keep `ADMIN_GPS_URL` and `CMS_GPS_INGEST_KEY` configured for the existing CMS-to-Admin GPS forwarding.
+
+Campaign delivery also requires `CMS_QUEUE_API_URL` (the CMS API origin ending in `/api`), `CMS_INTERNAL_KEY` (the same server-only key configured in CMS), and `CRON_SECRET` in the Admin server environment. `vercel.json` runs the authenticated assignment and playback-reconciliation worker every five minutes. Do not use any of these values in `VITE_*` variables or browser code.
+
+Apply the CMS queue media/idempotency migrations, existing Admin Device Management and CMS vehicle/screen migrations, and then `sql/202611230001_campaign_device_assignments.sql` to the shared Supabase project. Follow [sql/ADMIN_DM_APPLY.md](./sql/ADMIN_DM_APPLY.md); the campaign migration requires the advertiser `campaigns`/`locations` tables plus `admin_dm_devices`, `cms_vehicles`, `cms_screens`, and `cms_ad_queue`.
 
 The CMS backend verifies the fixed testing OTP only after looking up `KA01AB0000` in Supabase and confirming its active operator and screen assignment. The signed CMS session is short-lived; no Supabase Auth token or SMS is used. This isolated demo login does not require `REDIS_URL`; live SMS OTP continues to use shared Redis. To disable the temporary mode, set `CMS_DEMO_AUTH=false` in both projects and redeploy. Keep `SUPABASE_URL` plus `SUPABASE_SECRET_KEY` (or `SUPABASE_SERVICE_ROLE_KEY`) server-side in both projects.
 

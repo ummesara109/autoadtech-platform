@@ -24,8 +24,16 @@ import type { OtpChallenge, SessionPayload } from './auth.types';
 
 const CHALLENGE_TTL_SEC = 5 * 60;
 const SESSION_CACHE_TTL_SEC = 15 * 60;
+const SESSION_REVALIDATE_MS = 30_000;
 const DEFAULT_DEMO_AUTONUMBERS = ['KA01AB1234', 'KA02CD5678'];
 const TEMP_DEMO_AUTONUMBER = 'KA01AB0000';
+const DEMO_PLAYBACK_AUTONUMBERS = [
+  'KA01AB0000',
+  'KA01AB0001',
+  'KA01AB0002',
+  'KA01AB0003',
+  'KA01AB0004',
+];
 const TEMP_DEMO_CHALLENGE_PREFIX = 'cms-demo-challenge';
 
 type TemporaryDemoClaims = {
@@ -118,11 +126,36 @@ export class AuthService {
     return cmsDevAuth || !this.supabase.isConfigured;
   }
 
+  private localAutoNumberAuthEnabled() {
+    return (
+      this.config.get<string>('NODE_ENV') === 'development' &&
+      !this.config.get<string>('VERCEL') &&
+      !this.config.get<string>('VERCEL_ENV') &&
+      this.config.get<string>('CMS_DEV_AUTH')?.trim().toLowerCase() ===
+        'true' &&
+      this.config
+        .get<string>('CMS_LOCAL_AUTO_NUMBER_AUTH')
+        ?.trim()
+        .toLowerCase() === 'true'
+    );
+  }
+
+  private localDemoOtpEnabledForVehicle(autoNumber: string) {
+    return (
+      this.localAutoNumberAuthEnabled() ||
+      this.demoOtpEnabledForVehicle(autoNumber)
+    );
+  }
+
   private temporaryDemoAuthEnabled(autoNumber: string) {
     return (
       this.config.get<string>('CMS_DEMO_AUTH')?.trim().toLowerCase() ===
         'true' && normalizeAutoNumber(autoNumber) === TEMP_DEMO_AUTONUMBER
     );
+  }
+
+  private isDesignatedDemoPlaybackVehicle(autoNumber: string) {
+    return DEMO_PLAYBACK_AUTONUMBERS.includes(normalizeAutoNumber(autoNumber));
   }
 
   private demoOtpEnabledForVehicle(autoNumber: string) {
@@ -286,7 +319,14 @@ export class AuthService {
 
   async lookupAutoNumber(autoNumberRaw: string) {
     const autoNumber = normalizeAutoNumber(autoNumberRaw);
-    const temporaryDemo = this.temporaryDemoAuthEnabled(autoNumber);
+    const localAutoNumberAuth = this.localAutoNumberAuthEnabled();
+    const temporaryDemo =
+      !localAutoNumberAuth && this.temporaryDemoAuthEnabled(autoNumber);
+    if (localAutoNumberAuth && !this.supabase.isConfigured) {
+      throw new ServiceUnavailableException(
+        'Local Auto Number testing requires the configured CMS and Admin Supabase registry.',
+      );
+    }
     if (temporaryDemo) {
       this.enforceTemporaryDemoRateLimit(
         'demo-lookup',
@@ -307,7 +347,9 @@ export class AuthService {
     const vehicle = await this.findVehicle(autoNumber);
     if (!vehicle) {
       throw new NotFoundException(
-        'No registered vehicle found for this Auto Number',
+        localAutoNumberAuth
+          ? 'This Auto Number is not registered for CMS display. Register it in Admin and complete its CMS screen mapping.'
+          : 'No registered vehicle found for this Auto Number',
       );
     }
     if (vehicle.status !== 'active') {
@@ -322,6 +364,13 @@ export class AuthService {
       operator.id,
       vehicle.id,
     );
+    if (localAutoNumberAuth) {
+      await this.assertRegisteredDisplayDevice(
+        vehicle.id,
+        screen.id,
+        vehicle.autoNumber,
+      );
+    }
 
     if (temporaryDemo) {
       const expiresAt = new Date(Date.now() + CHALLENGE_TTL_SEC * 1000);
@@ -350,7 +399,8 @@ export class AuthService {
     }
 
     const demoAuthRequested = this.demoAuthRequested();
-    const localDemo = this.demoOtpEnabledForVehicle(vehicle.autoNumber);
+    const localDemo =
+      localAutoNumberAuth || this.demoOtpEnabledForVehicle(vehicle.autoNumber);
     if (demoAuthRequested && !localDemo) {
       throw new ForbiddenException(
         'Demo OTP is restricted to the configured demo vehicles.',
@@ -430,6 +480,7 @@ export class AuthService {
       expiresInSec: CHALLENGE_TTL_SEC,
       autoNumber: vehicle.autoNumber,
       devMode: demoMode,
+      localDevelopmentAuth: localAutoNumberAuth,
     };
   }
 
@@ -476,6 +527,7 @@ export class AuthService {
       expiresAt: challenge.expiresAt,
       message: 'OTP resent',
       devMode: this.challengeOtpMode(challenge) !== 'sms',
+      localDevelopmentAuth: this.localAutoNumberAuthEnabled(),
     };
   }
 
@@ -508,8 +560,13 @@ export class AuthService {
 
     const otpMode = this.challengeOtpMode(challenge);
     if (otpMode === 'local_demo') {
-      if (!this.demoOtpEnabledForVehicle(challenge.autoNumber)) {
+      if (!this.localDemoOtpEnabledForVehicle(challenge.autoNumber)) {
         throw new UnauthorizedException('Demo OTP is no longer enabled');
+      }
+      if (this.localAutoNumberAuthEnabled() && !this.supabase.isConfigured) {
+        throw new ServiceUnavailableException(
+          'Local Auto Number testing requires the configured CMS and Admin Supabase registry.',
+        );
       }
       if (otp !== DEV_OTP) {
         throw new UnauthorizedException('Invalid OTP');
@@ -568,6 +625,11 @@ export class AuthService {
       challenge.operatorId,
       challenge.vehicleId,
     );
+    await this.assertRegisteredDisplayDevice(
+      challenge.vehicleId,
+      screen.id,
+      challenge.autoNumber,
+    );
 
     const session: SessionPayload = {
       accessToken,
@@ -589,17 +651,24 @@ export class AuthService {
       JSON.stringify({
         ...session,
         authUserId,
+        sessionValidatedAt: Date.now(),
       }),
       expiresIn ?? SESSION_CACHE_TTL_SEC,
     );
 
-    // Seed demo ads before the display polls its dashboard.
-    if (otpMode === 'local_demo' && screen?.id) {
+    // Seed the shared demo rotation only for configured local demo auth or the
+    // explicitly designated playback vehicles; the queue helper preserves active ads.
+    if (
+      ((otpMode === 'local_demo' &&
+        !this.localAutoNumberAuthEnabled()) ||
+        this.isDesignatedDemoPlaybackVehicle(session.operator.autoNumber)) &&
+      screen?.id
+    ) {
       try {
         await this.queue.ensureDevDemoAdsIfEmpty(screen.id);
       } catch (err) {
         this.logger.warn(
-          `Dev demo queue seed skipped: ${err instanceof Error ? err.message : String(err)}`,
+          `Demo queue seed skipped: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
     }
@@ -641,12 +710,14 @@ export class AuthService {
       accessToken,
       expiresIn,
     );
-    try {
-      await this.queue.ensureDevDemoAdsIfEmpty(session.screen.id);
-    } catch (err) {
-      this.logger.warn(
-        `Temporary demo queue seed skipped: ${err instanceof Error ? err.message : String(err)}`,
-      );
+    if (this.isDesignatedDemoPlaybackVehicle(session.operator.autoNumber)) {
+      try {
+        await this.queue.ensureDevDemoAdsIfEmpty(session.screen.id);
+      } catch (err) {
+        this.logger.warn(
+          `Demo queue seed skipped: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
     return session;
   }
@@ -691,6 +762,11 @@ export class AuthService {
     const screen = await this.requireSingleScreenForOperator(
       operator.id,
       vehicle.id,
+    );
+    await this.assertRegisteredDisplayDevice(
+      vehicle.id,
+      screen.id,
+      vehicle.autoNumber,
     );
     if (screen.id !== claims.screenId) {
       throw new UnauthorizedException('Demo screen assignment has changed');
@@ -751,7 +827,18 @@ export class AuthService {
 
     const cached = await this.redis.get(this.sessionKey(accessToken));
     if (cached) {
-      return JSON.parse(cached) as SessionPayload & { authUserId?: string };
+      const session = JSON.parse(cached) as SessionPayload & {
+        authUserId?: string;
+        sessionValidatedAt?: number;
+      };
+      if (accessToken.startsWith('dev.')) return session;
+      if (
+        session.sessionValidatedAt &&
+        Date.now() - session.sessionValidatedAt < SESSION_REVALIDATE_MS
+      ) {
+        return session;
+      }
+      await this.redis.del(this.sessionKey(accessToken));
     }
 
     if (accessToken.startsWith('dev.')) {
@@ -780,26 +867,42 @@ export class AuthService {
 
     const { data: vehicle } = await this.supabase.client
       .from('cms_vehicles')
-      .select('auto_number')
+      .select('auto_number, status')
       .eq('id', op.vehicle_id)
       .maybeSingle();
+    const vehicleAutoNumber =
+      isRecord(vehicle) && typeof vehicle.auto_number === 'string'
+        ? vehicle.auto_number
+        : '';
+    if (!vehicle || vehicle.status !== 'active' || !vehicleAutoNumber) {
+      throw new UnauthorizedException('Vehicle is inactive');
+    }
 
     const screen = await this.requireSingleScreenForOperator(
       op.id,
       op.vehicle_id,
     );
-    const session: SessionPayload & { authUserId?: string } = {
+    await this.assertRegisteredDisplayDevice(
+      op.vehicle_id,
+      screen.id,
+      vehicleAutoNumber,
+    );
+    const session: SessionPayload & {
+      authUserId?: string;
+      sessionValidatedAt?: number;
+    } = {
       accessToken,
       operator: {
         id: op.id,
         displayName: op.display_name,
         roleCode: op.role_code,
         vehicleId: op.vehicle_id,
-        autoNumber: vehicle?.auto_number ?? '',
+        autoNumber: vehicleAutoNumber,
       },
       screen,
       screens: [screen],
       authUserId: data.user.id,
+      sessionValidatedAt: Date.now(),
     };
 
     await this.redis.set(
@@ -810,10 +913,151 @@ export class AuthService {
     return session;
   }
 
+  private async assertRegisteredDisplayDevice(
+    vehicleId: string,
+    screenId: string,
+    autoNumber?: string,
+  ) {
+    const localAutoNumberAuth = this.localAutoNumberAuthEnabled();
+    const productionRequiresMapping =
+      this.config.get<string>('NODE_ENV') === 'production' &&
+      this.config.get<string>('VERCEL_ENV') !== 'preview';
+    if (
+      (!productionRequiresMapping && !localAutoNumberAuth) ||
+      !this.supabase.isConfigured
+    ) {
+      return;
+    }
+
+    const linkQuery = this.supabase.client
+      .from('vehicle_cms_link')
+      .select('admin_device_id, admin_vehicle_id')
+      .eq('cms_vehicle_id', vehicleId)
+      .eq('cms_screen_id', screenId)
+      .eq('status', 'Active');
+    const scopedLinkQuery =
+      localAutoNumberAuth && autoNumber
+        ? linkQuery.eq('auto_number_norm', normalizeAutoNumber(autoNumber))
+        : linkQuery;
+    const { data: link, error: linkError } =
+      await scopedLinkQuery.maybeSingle();
+    if (linkError) {
+      throw new ServiceUnavailableException(
+        `Registered display mapping could not be verified: ${linkError.message}`,
+      );
+    }
+    const adminDeviceId =
+      isRecord(link) && typeof link.admin_device_id === 'string'
+        ? link.admin_device_id
+        : '';
+    const adminVehicleId =
+      isRecord(link) && typeof link.admin_vehicle_id === 'string'
+        ? link.admin_vehicle_id
+        : '';
+    if (!adminDeviceId || (localAutoNumberAuth && !adminVehicleId)) {
+      throw new UnauthorizedException(
+        localAutoNumberAuth
+          ? 'No active Admin device mapping exists for this Auto Number and screen. Register the vehicle and map its display in Admin.'
+          : 'No registered display device is assigned to this screen',
+      );
+    }
+
+    if (localAutoNumberAuth) {
+      const adminVehicleResult: unknown = await this.supabase.client
+        .from('admin_vehicles')
+        .select('id, payload')
+        .eq('id', adminVehicleId)
+        .maybeSingle();
+      if (!isRecord(adminVehicleResult)) {
+        throw new ServiceUnavailableException(
+          'Admin vehicle registration could not be verified.',
+        );
+      }
+      const adminVehicleError = isRecord(adminVehicleResult.error)
+        ? adminVehicleResult.error
+        : null;
+      if (adminVehicleError) {
+        const detail =
+          typeof adminVehicleError.message === 'string'
+            ? ` ${adminVehicleError.message}`
+            : '';
+        throw new ServiceUnavailableException(
+          `Admin vehicle registration could not be verified.${detail}`,
+        );
+      }
+      const adminVehicle = isRecord(adminVehicleResult.data)
+        ? adminVehicleResult.data
+        : null;
+      const payload =
+        adminVehicle && isRecord(adminVehicle.payload)
+          ? adminVehicle.payload
+          : null;
+      const adminAutoNumber = payload?.no;
+      const adminVehicleIsActive =
+        typeof payload?.status === 'string' &&
+        payload.status.trim().toLowerCase() === 'active';
+      if (
+        !adminVehicle ||
+        !autoNumber ||
+        typeof adminAutoNumber !== 'string' ||
+        !adminVehicleIsActive ||
+        normalizeAutoNumber(adminAutoNumber) !== normalizeAutoNumber(autoNumber)
+      ) {
+        throw new UnauthorizedException(
+          'This Auto Number is not an active Admin vehicle mapped to the CMS screen.',
+        );
+      }
+    }
+
+    let { data: device, error: deviceError } = await this.supabase.client
+      .from('admin_dm_devices')
+      .select('lifecycle_status, vehicle_id, vehicle_no')
+      .eq('id', adminDeviceId)
+      .maybeSingle();
+    if (!device && !deviceError) {
+      const byDeviceId = await this.supabase.client
+        .from('admin_dm_devices')
+        .select('lifecycle_status, vehicle_id, vehicle_no')
+        .eq('device_id', adminDeviceId)
+        .maybeSingle();
+      device = byDeviceId.data;
+      deviceError = byDeviceId.error;
+    }
+    if (deviceError) {
+      throw new ServiceUnavailableException(
+        `Registered display status could not be verified: ${deviceError.message}`,
+      );
+    }
+    const deviceLifecycleStatus =
+      isRecord(device) && typeof device.lifecycle_status === 'string'
+        ? device.lifecycle_status
+        : '';
+    if (!device || !['active', 'activated'].includes(deviceLifecycleStatus)) {
+      throw new UnauthorizedException(
+        'Registered display device is revoked or inactive',
+      );
+    }
+    const deviceVehicleId =
+      typeof device.vehicle_id === 'string' ? device.vehicle_id : '';
+    const deviceAutoNumber =
+      typeof device.vehicle_no === 'string' ? device.vehicle_no : '';
+    if (
+      localAutoNumberAuth &&
+      (deviceVehicleId !== adminVehicleId ||
+        (deviceAutoNumber &&
+          normalizeAutoNumber(deviceAutoNumber) !==
+            normalizeAutoNumber(autoNumber ?? '')))
+    ) {
+      throw new UnauthorizedException(
+        'The registered Admin display device is not assigned to this Auto Number.',
+      );
+    }
+  }
+
   private async startOtp(challenge: OtpChallenge) {
     const otpMode = this.challengeOtpMode(challenge);
     if (otpMode === 'local_demo') {
-      if (!this.demoOtpEnabledForVehicle(challenge.autoNumber)) {
+      if (!this.localDemoOtpEnabledForVehicle(challenge.autoNumber)) {
         throw new UnauthorizedException('Demo OTP is not enabled');
       }
       this.logger.log(`Demo OTP challenge created for ${challenge.autoNumber}`);

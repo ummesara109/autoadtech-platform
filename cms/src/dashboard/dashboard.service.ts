@@ -145,6 +145,11 @@ export class DashboardService {
         firmwareVersion: '',
         signalStrength: null,
         source: 'placeholder',
+        screenStatus: 'offline',
+        currentQueueItemId: null,
+        currentCampaignId: null,
+        lastPlaybackError: null,
+        lastSyncAt: null,
       };
     }
     const { data } = await this.supabase.client
@@ -152,12 +157,30 @@ export class DashboardService {
       .select('*')
       .eq('screen_id', screenId)
       .maybeSingle();
+    const lastSeenAt = data?.last_seen_at ?? null;
+    const heartbeatAgeMs = lastSeenAt
+      ? Date.now() - Date.parse(lastSeenAt)
+      : Number.POSITIVE_INFINITY;
+    const online =
+      data?.online === true &&
+      Number.isFinite(heartbeatAgeMs) &&
+      heartbeatAgeMs >= 0 &&
+      heartbeatAgeMs < 60_000;
     return {
-      online: data?.online ?? false,
-      lastSeenAt: data?.last_seen_at ?? null,
+      online,
+      lastSeenAt,
       firmwareVersion: data?.firmware_version ?? '',
       signalStrength: data?.signal_strength ?? null,
       source: 'cms_device_status',
+      screenStatus: online ? (data?.screen_status ?? 'idle') : 'offline',
+      currentQueueItemId: online
+        ? (data?.current_queue_item_id ?? null)
+        : null,
+      currentCampaignId: online
+        ? (data?.current_campaign_id ?? null)
+        : null,
+      lastPlaybackError: data?.last_playback_error ?? null,
+      lastSyncAt: data?.last_sync_at ?? null,
     };
   }
 

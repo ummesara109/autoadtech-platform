@@ -15,6 +15,8 @@ const cmsGps = require("./cms-gps");
 const cmsProvision = require("./cms-provision");
 const cmsOtp = require("./cms-otp");
 const deviceMgmt = require("./device-mgmt");
+const advertiserBridge = require("../config/advertiser-bridge");
+const { createCampaignDelivery } = require("./campaign-delivery");
 
 const IS_VERCEL = !!process.env.VERCEL;
 const DATA_DIR = path.join(__dirname, "..", "data");
@@ -41,6 +43,10 @@ let initPromise = null;
 let loadedAt = 0;
 let pendingSaves = 0;
 let busy = 0;
+const campaignDelivery = createCampaignDelivery({
+  supabase: require("../config/supabase"),
+  decideCampaign: advertiserBridge.decideCampaign
+});
 
 const REFRESH_MS = IS_VERCEL ? 60000 : 5000; // avoid reloading all tables on every click
 
@@ -1219,12 +1225,44 @@ async function api(req, res, pathname) {
     throw E(405, "Method not allowed");
   }
 
+  if (parts[0] === "campaign-delivery" && parts[1] === "run" && m === "GET") {
+    const expected = process.env.CRON_SECRET;
+    const provided = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+    const providedBytes = Buffer.from(provided);
+    const expectedBytes = Buffer.from(expected || "");
+    if (!expected || !provided ||
+        providedBytes.length !== expectedBytes.length ||
+        !crypto.timingSafeEqual(providedBytes, expectedBytes)) {
+      throw E(expected ? 401 : 503, "Campaign delivery scheduler authentication failed");
+    }
+    return send(res, 200, await campaignDelivery.runDue());
+  }
+
   const au = auth(req);
 
   if (!au) throw E(401, "Please sign in again");
 
   const col = parts[0];
   const id = parts[1] ? Number(parts[1]) : null;
+
+  if (col === "campaign-delivery") {
+    if (au.portal !== "admin") throw E(403, "Not allowed");
+    if (m === "GET" && !parts[1]) {
+      return send(res, 200, await campaignDelivery.list());
+    }
+    if (au.role === "Viewer") throw E(403, "Not allowed");
+    if (m === "POST" && parts[2] === "approve") {
+      return send(res, 200, await campaignDelivery.approve(parts[1]));
+    }
+    if (m === "POST" && parts[2] === "reject") {
+      const body = await readBody(req);
+      return send(res, 200, await campaignDelivery.reject(parts[1], body.reason));
+    }
+    if (m === "POST" && parts[2] === "retry") {
+      return send(res, 200, await campaignDelivery.retry(parts[1]));
+    }
+    throw E(405, "Method not allowed");
+  }
 
   if (m === "GET" && col === "me") {
     return send(res, 200, meOf(au));

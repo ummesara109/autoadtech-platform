@@ -39,7 +39,10 @@ export class MemoryQueueStore {
   listByScreen(screenId: string) {
     return this.items
       .filter((i) => i.screenId === screenId)
-      .sort((a, b) => a.position - b.position || a.createdAt.localeCompare(b.createdAt));
+      .sort(
+        (a, b) =>
+          a.position - b.position || a.createdAt.localeCompare(b.createdAt),
+      );
   }
 
   listHistory(screenId: string, limit = 20) {
@@ -50,7 +53,11 @@ export class MemoryQueueStore {
   }
 
   playing(screenId: string) {
-    return this.items.find((i) => i.screenId === screenId && i.status === 'PLAYING') ?? null;
+    return (
+      this.items.find(
+        (i) => i.screenId === screenId && i.status === 'PLAYING',
+      ) ?? null
+    );
   }
 
   queued(screenId: string) {
@@ -84,6 +91,7 @@ export class MemoryQueueStore {
         status: 'QUEUED',
         externalAdId: ad.externalAdId ?? null,
         mediaUrl: ad.mediaUrl?.trim() || null,
+        expiresAt: ad.expiresAt ?? null,
         startedAt: null,
         endedAt: null,
         failReason: null,

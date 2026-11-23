@@ -2,6 +2,8 @@ import { Type } from 'class-transformer';
 import {
   ArrayMinSize,
   IsArray,
+  IsDateString,
+  IsIn,
   IsInt,
   IsOptional,
   IsString,
@@ -37,6 +39,10 @@ class AdDto {
   @IsString()
   @MaxLength(2000)
   mediaUrl?: string;
+
+  @IsOptional()
+  @IsDateString()
+  expiresAt?: string;
 }
 
 export class EnqueueAdsDto {
@@ -73,7 +79,27 @@ export class PlayerQueueActionDto {
   queueItemId!: string;
 
   @IsOptional()
+  @IsDateString()
+  occurredAt?: string;
+
+  @IsOptional()
   @IsString()
   @MaxLength(500)
   reason?: string;
+}
+
+export class PlayerHeartbeatDto {
+  @IsOptional()
+  @IsUUID('4')
+  queueItemId?: string;
+
+  @IsString()
+  @IsIn(['playing', 'idle', 'error'])
+  @MaxLength(16)
+  status!: 'playing' | 'idle' | 'error';
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  playbackError?: string;
 }

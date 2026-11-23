@@ -118,9 +118,11 @@ export function OtpPage() {
       <Panel className="mt-4 w-full">
         <Title
           subtitle={
-            active.devMode
-              ? `Temporary testing mode is enabled for ${active.autoNumber}. Enter the test OTP provided to you.`
-              : `We sent a 6-digit code to ${active.maskedMobile} for ${active.autoNumber}.`
+            active.localDevelopmentAuth
+              ? `Local development authentication is enabled for ${active.autoNumber}. Use OTP 123456.`
+              : active.devMode
+                ? `Temporary testing mode is enabled for ${active.autoNumber}. Enter the test OTP provided to you.`
+                : `We sent a 6-digit code to ${active.maskedMobile} for ${active.autoNumber}.`
           }
         >
           Enter OTP
@@ -149,11 +151,19 @@ export function OtpPage() {
               {Math.floor(secondsLeft / 60)}:
               {String(secondsLeft % 60).padStart(2, '0')}
             </span>
-            {active.devMode
-              ? ' · Testing only — disable CMS_DEMO_AUTH before real drivers use this app.'
-              : null}
+            {active.localDevelopmentAuth
+              ? ' · Local development testing only.'
+              : active.devMode
+                ? ' · Testing only — disable CMS_DEMO_AUTH before real drivers use this app.'
+                : null}
           </p>
-          {active.devMode ? (
+          {active.localDevelopmentAuth ? (
+            <Alert tone="warn">
+              Local-only authentication is enabled. It requires a vehicle and
+              active display mapping already registered in Admin; do not enable
+              this setting in Preview or Production.
+            </Alert>
+          ) : active.devMode ? (
             <Alert tone="warn">
               Testing-only authentication is enabled. Disable CMS_DEMO_AUTH in
               Vercel and redeploy before real drivers use this app.

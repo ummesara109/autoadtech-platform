@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  ForbiddenException,
   Headers,
   Post,
   Req,
@@ -12,6 +13,7 @@ import { AuthGuard } from '../auth/auth.guard';
 import type { SessionPayload } from '../auth/auth.types';
 import {
   EnqueueAdsDto,
+  PlayerHeartbeatDto,
   PlayerQueueActionDto,
   QueueItemActionDto,
 } from './dto/enqueue-ads.dto';
@@ -101,6 +103,7 @@ export class QueueController {
     return this.queue.completePlaying(
       req.cmsSession.screen.id,
       body.queueItemId,
+      body.occurredAt,
     );
   }
 
@@ -117,13 +120,42 @@ export class QueueController {
       req.cmsSession.screen.id,
       body.queueItemId,
       body.reason,
+      body.occurredAt,
     );
+  }
+
+  @Post('player/start')
+  @UseGuards(AuthGuard)
+  playerStart(
+    @Req() req: { cmsSession: SessionPayload },
+    @Body() body: PlayerQueueActionDto,
+  ) {
+    return this.queue.startPlaying(
+      req.cmsSession.screen.id,
+      body.queueItemId,
+      body.occurredAt,
+    );
+  }
+
+  @Post('player/heartbeat')
+  @UseGuards(AuthGuard)
+  playerHeartbeat(
+    @Req() req: { cmsSession: SessionPayload },
+    @Body() body: PlayerHeartbeatDto,
+  ) {
+    return this.queue.recordPlayerHeartbeat(req.cmsSession.screen.id, body);
   }
 
   /** Operator-facing read is via dashboard; this is a guarded debug peek. */
   @Post('snapshot')
   @UseGuards(AuthGuard)
-  snapshot(@Body() body: { screenId: string }) {
+  snapshot(
+    @Req() req: { cmsSession: SessionPayload },
+    @Body() body: { screenId: string },
+  ) {
+    if (body.screenId !== req.cmsSession.screen.id) {
+      throw new ForbiddenException('Screen is not assigned to this session');
+    }
     return this.queue.snapshot(body.screenId);
   }
 }

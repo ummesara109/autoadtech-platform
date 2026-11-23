@@ -42,6 +42,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_cms_screens_one_active_per_vehicle
 -- ---------------------------------------------------------------------------
 -- Queue status machine: QUEUED | PLAYING | COMPLETED | FAILED | CANCELLED
 -- ---------------------------------------------------------------------------
+ALTER TABLE cms_ad_queue
+  DROP CONSTRAINT IF EXISTS cms_ad_queue_status_check;
+
 UPDATE cms_ad_queue
   SET status = 'COMPLETED'
   WHERE lower(status) IN ('done', 'completed');
@@ -54,7 +57,6 @@ UPDATE cms_ad_queue
   SET status = upper(status)
   WHERE status IS NOT NULL;
 
-ALTER TABLE cms_ad_queue DROP CONSTRAINT IF EXISTS cms_ad_queue_status_check;
 ALTER TABLE cms_ad_queue
   ADD CONSTRAINT cms_ad_queue_status_check
   CHECK (status IN ('QUEUED', 'PLAYING', 'COMPLETED', 'FAILED', 'CANCELLED'));
@@ -73,6 +75,26 @@ UPDATE cms_ad_queue q
 SET vehicle_id = s.vehicle_id
 FROM cms_screens s
 WHERE q.screen_id = s.id AND q.vehicle_id IS NULL;
+
+-- Keep the earliest queued item as the active item when legacy data has
+-- multiple PLAYING rows on one screen; return the others to the queue.
+WITH ranked_playing AS (
+  SELECT
+    id,
+    row_number() OVER (
+      PARTITION BY screen_id
+      ORDER BY position ASC, created_at ASC, id ASC
+    ) AS screen_rank
+  FROM cms_ad_queue
+  WHERE status = 'PLAYING'
+)
+UPDATE cms_ad_queue AS queue_item
+SET status = 'QUEUED',
+    started_at = NULL,
+    ended_at = NULL
+FROM ranked_playing
+WHERE queue_item.id = ranked_playing.id
+  AND ranked_playing.screen_rank > 1;
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_cms_ad_queue_one_playing_per_screen
   ON cms_ad_queue (screen_id)

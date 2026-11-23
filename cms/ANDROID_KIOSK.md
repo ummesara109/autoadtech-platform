@@ -5,6 +5,7 @@ The PWA can run **immersive fullscreen** (`manifest.display: fullscreen`, landsc
 ## What the web app already does
 
 - Fullscreen PWA display mode + landscape orientation preference (`name` / `short_name`: Auto AdTech Display / Auto Display)
+- Native Capacitor Android build is landscape-locked, reapplies immersive fullscreen on resume/focus, and keeps the display awake while the player is open
 - **Idle = pure black** (no waiting chrome, logo, or location strip on the passenger stage)
 - Small **Log out** always top-right (**Online** badge removed); mouse cursor stays **visible**
 - Automatic playback of queue `mediaUrl` only (no invented creatives); video `ended` / image dwell → `POST /api/queue/player/complete` advances the queue
@@ -14,6 +15,18 @@ The PWA can run **immersive fullscreen** (`manifest.display: fullscreen`, landsc
   - **Top-left corner long-press** (~2.8s), or
   - URL query: `/display?ops=1`
 - **CSS/JS cannot block Android system navigation** — use MDM / Fully Kiosk below
+
+## Native playback and offline behavior
+
+- The Android app uses the same authenticated DisplayScreen and server queue; it does not create a second player or queue.
+- The player polls for queue changes, reports a heartbeat while online, and retries queued playback acknowledgements after reconnecting.
+- Images use the existing service-worker cache. Videos are downloaded only by the native Android app to its private app storage, for assigned, unexpired queue items, and only when the server provides a known size no greater than 100 MiB. Video files are not put in Cache Storage, preserving normal online HTTP Range playback.
+- A web-only PWA does not persist complete video files for offline playback. Native video downloads require enough app storage and a successful download before connectivity is lost.
+- Queue expiry is enforced from persisted campaign metadata while offline and on the next server sync. Removed/expired native video files are cleaned up as the queue refreshes.
+- `MainActivity` fullscreen and keep-awake flags do not provide lock-task security, process restart, or app boot autostart. The existing GPS boot receiver only restarts GPS tracking; it does not launch the display activity. Configure MDM / Fully Kiosk to relaunch the app after reboot or crash.
+- The existing silent GPS foreground service is unchanged.
+
+Build and synchronize the native Android project from the `cms` directory with `npm run build:android`, then build/install the generated Android project using Android Studio or Gradle.
 
 ## Required: lock the device outside the browser
 

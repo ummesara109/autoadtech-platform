@@ -20,12 +20,12 @@ cms/
 │   ├── scripts/
 │   ├── index.html
 │   ├── vite.config.mts
-│   ├── tsconfig*.json
-│   └── capacitor.config.json
+│   └── tsconfig*.json
 ├── plugins/niyoads-silent-gps/  # Capacitor workspace dependency
 ├── supabase/migrations/         # Existing CMS schema migrations
 ├── android-companion/           # Native GPS documentation
 ├── tools/
+├── capacitor.config.json         # Capacitor config; points to frontend/ and frontend/android/
 ├── package.json                 # Unified CMS commands and dependencies
 ├── .env                         # Local server/Vite configuration; ignored by Git
 ├── Dockerfile
@@ -72,7 +72,17 @@ Set the CMS server environment variables in the Vercel project settings. Keep
 Production CORS is same-origin by default; set `CORS_ORIGIN` to a comma-separated
 allowlist only when the API must be called cross-origin.
 
-For local seeded login, set `CMS_DEV_AUTH=true`; the existing local OTP is `123456`.
+For the in-memory local sample login, set `CMS_DEV_AUTH=true`; the existing
+seeded Auto Numbers are `KA01AB1234` and `KA02CD5678`, and the local OTP is
+`123456`. To test real registered fleet vehicles locally, set
+`NODE_ENV=development`, `CMS_DEV_AUTH=true`, and
+`CMS_LOCAL_AUTO_NUMBER_AUTH=true`. This additional opt-in is accepted only by a
+non-Vercel development server. It still requires the Auto Number to exist in the
+CMS vehicle/operator registry and an active `vehicle_cms_link` to an active
+Admin display device and the vehicle's active CMS screen. No vehicle, device,
+operator, or screen is created by login. Disable the option with
+`CMS_LOCAL_AUTO_NUMBER_AUTH=false` when finished.
+
 For temporary Production testing of only `KA01AB0000`, set `CMS_DEMO_AUTH=true` in
 both the CMS and Admin Vercel projects. The vehicle must still exist in the
 configured Supabase registry and have an active operator and assigned screen. This
@@ -83,6 +93,14 @@ Supabase Auth token or require Redis. Disable it after testing with
 `CMS_DEMO_AUTH=false` and redeploy. Keep `CMS_DEV_AUTH=false` in Production; it
 does not enable this temporary mode. The Supabase service-role/secret key must
 remain server-side.
+
+Production demo playback is separate from demo authentication. After successful
+authentication, the existing two-ad demo rotation
+(`/test-ad-restaurant.mp4` and `/ad2-bbq-catering.mp4`) may be seeded only for
+`KA01AB0000`–`KA01AB0004`, and only when that vehicle's already-assigned screen
+has no playing or queued ad. `KA01AB0001`–`KA01AB0004` continue to use normal SMS
+OTP in Production; `CMS_DEMO_VEHICLES` does not enable the fixed demo OTP there.
+This does not create vehicle, device, or screen mappings.
 
 ## Production build and run
 
@@ -154,6 +172,7 @@ builds.
 | `SUPABASE_URL` | Existing Supabase project URL |
 | `SUPABASE_SERVICE_ROLE_KEY` / `SUPABASE_SECRET_KEY` | Server-side Supabase access |
 | `CMS_DEV_AUTH` | Local/Preview seed authentication; keep `false` in Production |
+| `CMS_LOCAL_AUTO_NUMBER_AUTH` | Extra local-only OTP mode for existing registered vehicles; requires `NODE_ENV=development`, `CMS_DEV_AUTH=true`, and no Vercel environment |
 | `CMS_DEMO_AUTH` | Set to `true` in Admin and CMS Production only for temporary `KA01AB0000` demo OTP; set `false` and redeploy to disable |
 | `CMS_DEMO_VEHICLES` | Optional comma-separated demo plate allowlist; defaults to `KA01AB1234,KA02CD5678` |
 | `REDIS_URL` | Shared OTP/session/dashboard cache; required for live SMS OTP, not for the isolated `KA01AB0000` demo flow |
@@ -220,8 +239,11 @@ it to the browser. Production CMS requests never include the Preview bypass head
 
 The application continues using the existing Supabase schema and migrations. Apply
 the migrations in `supabase/migrations/` to the existing project; do not create
-duplicate tables. Production demo login requires registered vehicle/operator/
-screen rows and server-side Supabase credentials. Supabase Phone Auth and an SMS
+duplicate tables. For campaign delivery, apply
+`202611230001_campaign_queue_idempotency.sql` after the queue schema migration;
+it makes retries idempotent by screen and campaign ID without changing legacy
+queue rows. Production demo login requires registered vehicle/operator/screen
+rows and server-side Supabase credentials. Supabase Phone Auth and an SMS
 provider are required only when `CMS_DEV_AUTH=false` and live SMS OTP is used.
 
 ## Validation
