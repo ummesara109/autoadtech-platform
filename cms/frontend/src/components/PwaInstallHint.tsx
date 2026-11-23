@@ -37,19 +37,27 @@ export function PwaInstallHint() {
       </div>
       {!canPrompt && showManualSteps ? (
         <p className="mt-2" role="status">
+          Automatic install isn’t available in this browser right now.{' '}
           {showIosHint ? (
             <>
-              In Safari, tap <strong className="text-[var(--cms-ink)]">Share</strong> →{' '}
+              On iPhone or iPad, tap <strong className="text-[var(--cms-ink)]">Share</strong> →{' '}
               <strong className="text-[var(--cms-ink)]">Add to Home Screen</strong>.
+              If that option is missing, open this page in Safari and try again.
+            </>
+          ) : /Android/i.test(navigator.userAgent) ? (
+            <>
+              On Android, open the browser menu and choose{' '}
+              <strong className="text-[var(--cms-ink)]">Install app</strong> or{' '}
+              <strong className="text-[var(--cms-ink)]">Add to Home screen</strong>.
             </>
           ) : (
             <>
-              This browser hasn’t offered an in-page install prompt. Open its menu and
-              choose <strong className="text-[var(--cms-ink)]">Install app</strong> or{' '}
-              <strong className="text-[var(--cms-ink)]">Add to Home Screen</strong>.
+              Open this page in a browser that supports PWA installation, then use its
+              menu to choose <strong className="text-[var(--cms-ink)]">Install app</strong>{' '}
+              or <strong className="text-[var(--cms-ink)]">Add to Home Screen</strong>.
             </>
           )}{' '}
-          The site must use HTTPS.
+          Use the site’s HTTPS address, not an in-app browser or an HTTP address.
         </p>
       ) : null}
     </div>

@@ -26,18 +26,16 @@ function isStandaloneDisplay(): boolean {
   return Boolean(mq || iosStandalone || fullscreen);
 }
 
-function isIosSafari(): boolean {
+function isIos(): boolean {
   if (typeof navigator === 'undefined') return false;
   const ua = navigator.userAgent || '';
-  const iOS = /iPad|iPhone|iPod/.test(ua) ||
+  return /iPad|iPhone|iPod/.test(ua) ||
     (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-  const webkit = /WebKit/i.test(ua);
-  const chromeIsh = /CriOS|FxiOS|EdgiOS/i.test(ua);
-  return iOS && webkit && !chromeIsh;
 }
 
 /**
- * Real browser install prompt only (no fake Chrome sheet).
+ * Uses the browser's real install prompt when available; otherwise provides
+ * platform-specific manual instructions.
  * Safe on Login — never used on the kiosk Display surface.
  */
 export function usePwaInstall() {
@@ -48,7 +46,7 @@ export function usePwaInstall() {
 
   useEffect(() => {
     setInstalled(isStandaloneDisplay());
-    setIosHint(!isStandaloneDisplay() && isIosSafari());
+    setIosHint(!isStandaloneDisplay() && isIos());
 
     const onPromptAvailable = () => setDeferred(deferredInstallPrompt);
     const onInstalled = () => {
