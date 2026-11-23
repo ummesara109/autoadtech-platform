@@ -1,8 +1,14 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
 const test = require("node:test");
-const { ensureAdminDevice, stampDevice } = require("./cms-gps");
+const {
+  ensureAdminDevice,
+  initCmsGps,
+  resolveLink,
+  stampDevice
+} = require("./cms-gps");
 
 test("creates a missing mapped Admin device without inventing a position", () => {
   const db = {
@@ -70,4 +76,39 @@ test("does not create an Admin device without coordinates to stamp", () => {
   assert.equal(result.stamped, false);
   assert.match(result.error, /coordinates are invalid/);
   assert.equal(db.devices.length, 0);
+});
+
+test("does not write local GPS files or seed demo mappings on Vercel", async () => {
+  const env = {
+    VERCEL: process.env.VERCEL,
+    SUPABASE_URL: process.env.SUPABASE_URL,
+    SUPABASE_SECRET_KEY: process.env.SUPABASE_SECRET_KEY,
+    SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY
+  };
+  const originalMkdirSync = fs.mkdirSync;
+  let mkdirCalls = 0;
+  process.env.VERCEL = "1";
+  delete process.env.SUPABASE_URL;
+  delete process.env.SUPABASE_SECRET_KEY;
+  delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+  fs.mkdirSync = () => {
+    mkdirCalls += 1;
+    throw new Error("Vercel filesystem is read-only");
+  };
+
+  try {
+    await initCmsGps();
+
+    assert.equal(mkdirCalls, 0);
+    assert.equal(
+      resolveLink({ autoNumber: "KA01AB1234" }).code,
+      404
+    );
+  } finally {
+    fs.mkdirSync = originalMkdirSync;
+    for (const [key, value] of Object.entries(env)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 });

@@ -80,6 +80,7 @@ function readJsonFile(file) {
 }
 
 function writeJsonFile(file, value) {
+  if (process.env.VERCEL) return false;
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
     const tmp = file + ".tmp";
@@ -125,17 +126,19 @@ function ensureSeeded() {
   if (seeded) return;
   seeded = true;
 
-  const fromDisk = readJsonFile(LINK_FILE);
+  const fromDisk = process.env.VERCEL ? null : readJsonFile(LINK_FILE);
   if (Array.isArray(fromDisk) && fromDisk.length) {
     fromDisk.forEach(putLink);
-  } else {
+  } else if (!process.env.VERCEL && !hasSupabaseEnv()) {
     demoLinks().forEach(putLink);
     writeJsonFile(LINK_FILE, [...linkByAuto.values()]);
   }
 
-  const gpsDisk = readJsonFile(GPS_FILE);
-  if (Array.isArray(gpsDisk)) {
-    gpsDisk.forEach(putGps);
+  if (!process.env.VERCEL) {
+    const gpsDisk = readJsonFile(GPS_FILE);
+    if (Array.isArray(gpsDisk)) {
+      gpsDisk.forEach(putGps);
+    }
   }
 }
 
@@ -159,6 +162,7 @@ async function refreshLinksFromSupabase() {
     }
 
     supabaseAvailable = true;
+    linkByAuto.clear();
     for (const row of data || []) {
       putLink({
         id: String(row.id),

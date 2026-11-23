@@ -152,6 +152,14 @@ function readStoreFile() {
 
 function writeStoreFile() {
   if (!store) return;
+  if (process.env.VERCEL) {
+    if (supabaseDmOk !== true) {
+      throw new Error(
+        "Device Management requires configured Supabase tables on Vercel."
+      );
+    }
+    return;
+  }
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
     const tmp = STORE_FILE + ".tmp";
