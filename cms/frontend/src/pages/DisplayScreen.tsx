@@ -1031,13 +1031,9 @@ export function DisplayScreen() {
         >
           {gpsError}
         </div>
-      ) : gpsStatus !== 'idle' ? (
+      ) : gpsStatus !== 'idle' && gpsStatus !== 'active' ? (
         <div
-          className={`pointer-events-none absolute inset-x-3 bottom-3 z-20 mx-auto max-w-xl rounded-lg border px-3 py-2 text-center text-xs ${
-            gpsStatus === 'active'
-              ? 'border-emerald-400/40 bg-emerald-950/90 text-emerald-100'
-              : 'border-slate-400/40 bg-slate-950/90 text-slate-100'
-          }`}
+          className="pointer-events-none absolute inset-x-3 bottom-3 z-20 mx-auto max-w-xl rounded-lg border border-slate-400/40 bg-slate-950/90 px-3 py-2 text-center text-xs text-slate-100"
           role="status"
           aria-live="polite"
         >
@@ -1047,9 +1043,7 @@ export function DisplayScreen() {
               ? 'Location permission granted; waiting for a GPS fix…'
               : gpsStatus === 'sending'
                 ? 'GPS captured; sending update to CMS and Admin…'
-                : gpsStatus === 'pending'
-                  ? 'GPS captured; Admin forwarding is pending.'
-                  : 'Live GPS is active; Admin tracking is up to date.'}
+                : 'GPS captured; Admin forwarding is pending.'}
         </div>
       ) : null}
 
