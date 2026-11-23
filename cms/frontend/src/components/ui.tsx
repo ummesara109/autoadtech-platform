@@ -9,7 +9,9 @@ export function Shell({
 }) {
   return (
     <div
-      className={`mx-auto flex min-h-dvh w-full flex-col px-4 py-6 sm:px-6 lg:px-8 ${
+      className={`mx-auto flex min-h-dvh w-full flex-col py-6 ${
+        narrow ? 'px-7 sm:px-6 lg:px-8' : 'px-4 sm:px-6 lg:px-8'
+      } ${
         narrow ? 'max-w-md justify-center' : 'max-w-5xl'
       }`}
     >

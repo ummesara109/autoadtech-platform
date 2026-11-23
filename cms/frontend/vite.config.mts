@@ -28,7 +28,6 @@ export default defineConfig({
         background_color: '#050e0a',
         display: 'fullscreen',
         display_override: ['fullscreen', 'standalone', 'minimal-ui'],
-        orientation: 'landscape',
         // App root: login → OTP → /display (session resumes at /display after install)
         start_url: '/',
         scope: '/',

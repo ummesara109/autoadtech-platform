@@ -22,7 +22,7 @@ export function PwaInstallHint() {
 
   return (
     <div
-      className="mt-4 rounded-xl border border-[var(--cms-border)] bg-[color-mix(in_srgb,var(--cms-panel)_70%,transparent)] p-3 text-sm text-[var(--cms-muted)]"
+      className="pwa-install-hint mt-4 rounded-xl border border-[var(--cms-border)] bg-[color-mix(in_srgb,var(--cms-panel)_70%,transparent)] p-3 text-sm text-[var(--cms-muted)]"
       role="region"
       aria-label="Install Auto Display"
     >
