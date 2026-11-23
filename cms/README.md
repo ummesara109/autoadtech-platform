@@ -94,15 +94,18 @@ vehicle; unset or malformed values fail closed. Keep `CMS_DEV_AUTH=false` in
 Production.
 
 All five vehicles must exist in the configured Supabase registry and have an
-active operator and exactly one assigned active CMS screen. The four new
-challenges expire after five minutes, use shared Redis rate limits, and lock
-after five incorrect codes. Their issue, failure, expiry, lockout, and success
-events are written to CMS server logs without logging OTP values. They use the
-existing CMS session and GPS flow; no Supabase SMS is sent for these challenges.
-The four new challenges require a reachable shared `REDIS_URL`. The existing
-`KA01AB0000` flow remains signed/stateless and does not require Redis. Disable
-the demo mode after testing with `CMS_DEMO_AUTH=false` and redeploy. The
-Supabase service-role/secret key must remain server-side.
+active operator and exactly one assigned active CMS screen. All five demo
+challenges use the existing signed, stateless flow and do not require Redis or
+send Supabase SMS. Challenges expire after five minutes; resend and verification
+attempt limits are enforced by the CMS process, with five incorrect attempts
+blocked per challenge. Issue, failure, expiry, lockout, and success events are
+written to CMS server logs without logging OTP values. Since Vercel functions
+may run in separate or restarted processes, these in-memory limits are
+best-effort and are not a globally shared lockout. These demo credentials are
+for controlled testing, not real-driver authentication. They use the existing
+CMS session and GPS flow. Disable demo mode after testing with
+`CMS_DEMO_AUTH=false` and redeploy. The Supabase service-role/secret key must
+remain server-side.
 
 The temporary `KA01AB0000` Production CMS PWA session does not validate the
 Admin display-device mapping or lifecycle status. It still requires the active
@@ -193,7 +196,7 @@ builds.
 | `CMS_DEMO_AUTH` | Temporary demo OTP switch for the five designated plates; set `false` and redeploy to disable |
 | `CMS_DEMO_OTP_KA01AB0001`–`CMS_DEMO_OTP_KA01AB0004` | Server-only six-digit OTP secrets for the four additional registered demo vehicles |
 | `CMS_DEMO_VEHICLES` | Optional comma-separated demo plate allowlist; defaults to `KA01AB1234,KA02CD5678` |
-| `REDIS_URL` | Shared OTP/session/dashboard cache; required for SMS OTP and the four additional demo challenges, not for the isolated `KA01AB0000` demo flow |
+| `REDIS_URL` | Shared OTP/session/dashboard cache; required for live SMS OTP, not for the five signed demo OTP flows |
 | `CMS_INTERNAL_KEY` | Protects internal ad-queue endpoints |
 | `ADMIN_GPS_URL` / `ADMIN_API_URL` | Admin API origin for CMS GPS forwarding |
 | `CMS_GPS_INGEST_KEY` | Server-to-server Admin ingest key |
@@ -211,15 +214,14 @@ in the **Production** environment of both Vercel projects. Set the four
 server environment settings; keep them out of Admin frontend/build variables.
 The Admin backend uses `CMS_DEMO_AUTH` for phone-less provisioning of the five
 designated plates; the CMS backend reads the flag and OTP secrets at runtime
-through Nest `ConfigModule`. The existing KA01AB0000 flow uses its signed,
-short-lived HttpOnly cookie; the four additional vehicles use the existing
-Redis-backed CMS challenge/session flow. Redeploy both projects after changing
+through Nest `ConfigModule`. All five vehicles use the existing signed,
+short-lived HttpOnly demo session cookie and do not require Redis. Redeploy both projects after changing
 environment variables. After testing, set `CMS_DEMO_AUTH=false` and redeploy to
 disable these demo login paths before real drivers use the app.
 Provide `SUPABASE_URL` and either `SUPABASE_SERVICE_ROLE_KEY` or
 `SUPABASE_SECRET_KEY` server-side in both projects, pointing to the same project.
-The CMS project needs a reachable shared `REDIS_URL` for live SMS OTP and its
-shared challenges. The isolated temporary demo path does not use Redis. Leave
+The CMS project needs a reachable shared `REDIS_URL` for live SMS OTP. The
+five temporary demo OTP flows do not use Redis. Leave
 `VITE_API_URL` empty for same-origin `/api` routing. Never expose a service key,
 SMS credentials, the demo flag, or phone number through a `VITE_*` variable.
 

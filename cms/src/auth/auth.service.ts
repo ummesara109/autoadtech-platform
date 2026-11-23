@@ -157,7 +157,9 @@ export class AuthService {
   private temporaryDemoAuthEnabled(autoNumber: string) {
     return (
       this.config.get<string>('CMS_DEMO_AUTH')?.trim().toLowerCase() ===
-        'true' && normalizeAutoNumber(autoNumber) === TEMP_DEMO_AUTONUMBER
+        'true' &&
+      (normalizeAutoNumber(autoNumber) === TEMP_DEMO_AUTONUMBER ||
+        Boolean(ADDITIONAL_DEMO_OTP_ENV_KEYS[normalizeAutoNumber(autoNumber)]))
     );
   }
 
@@ -184,6 +186,12 @@ export class AuthService {
       );
     }
     return otp;
+  }
+
+  private temporaryDemoOtp(autoNumber: string) {
+    const normalized = normalizeAutoNumber(autoNumber);
+    if (normalized === TEMP_DEMO_AUTONUMBER) return DEV_OTP;
+    return this.configuredAdditionalDemoOtp(normalized);
   }
 
   private matchesOtp(provided: string, expected: string) {
@@ -222,6 +230,7 @@ export class AuthService {
       });
     } else {
       if (current.count >= limit) {
+        this.logger.warn(`Temporary demo OTP rate limit exceeded for ${scope}`);
         throw new HttpException(message, HttpStatus.TOO_MANY_REQUESTS);
       }
       current.count += 1;
@@ -301,10 +310,19 @@ export class AuthService {
       typeof payload.autoNumber !== 'string' ||
       typeof payload.screenId !== 'string' ||
       typeof payload.exp !== 'number' ||
-      !Number.isInteger(payload.exp) ||
-      payload.exp <= Math.floor(Date.now() / 1000) ||
-      !this.temporaryDemoAuthEnabled(payload.autoNumber)
+      !Number.isInteger(payload.exp)
     ) {
+      throw new UnauthorizedException('Invalid or expired demo session');
+    }
+    if (payload.exp <= Math.floor(Date.now() / 1000)) {
+      if (prefix === TEMP_DEMO_CHALLENGE_PREFIX) {
+        this.logger.warn(
+          `Temporary demo OTP challenge expired for ${normalizeAutoNumber(payload.autoNumber)}`,
+        );
+      }
+      throw new UnauthorizedException('Invalid or expired demo session');
+    }
+    if (!this.temporaryDemoAuthEnabled(payload.autoNumber)) {
       throw new UnauthorizedException('Invalid or expired demo session');
     }
     return {
@@ -380,6 +398,9 @@ export class AuthService {
           'Demo OTP requires the configured Supabase vehicle registry and server-side key.',
         );
       }
+      if (autoNumber !== TEMP_DEMO_AUTONUMBER) {
+        this.configuredAdditionalDemoOtp(autoNumber);
+      }
     } else {
       this.ensureSharedOtpStorage();
     }
@@ -405,6 +426,15 @@ export class AuthService {
       vehicle.id,
     );
     if (localAutoNumberAuth) {
+      await this.assertRegisteredDisplayDevice(
+        vehicle.id,
+        screen.id,
+        vehicle.autoNumber,
+      );
+    } else if (
+      temporaryDemo &&
+      normalizeAutoNumber(vehicle.autoNumber) !== TEMP_DEMO_AUTONUMBER
+    ) {
       await this.assertRegisteredDisplayDevice(
         vehicle.id,
         screen.id,
@@ -550,6 +580,9 @@ export class AuthService {
         60,
         'Too many demo OTP resend requests. Wait one minute and try again.',
       );
+      this.logger.log(
+        `Temporary demo OTP challenge resent for ${claims.autoNumber}`,
+      );
       return {
         challengeId,
         maskedMobile: 'Demo OTP',
@@ -673,7 +706,7 @@ export class AuthService {
           'Local Auto Number testing requires the configured CMS and Admin Supabase registry.',
         );
       }
-      if (otp !== DEV_OTP) {
+      if (!this.matchesOtp(otp, DEV_OTP)) {
         throw new UnauthorizedException('Invalid OTP');
       }
       accessToken = `dev.${challenge.operatorId}.${randomUUID()}`;
@@ -803,7 +836,11 @@ export class AuthService {
       CHALLENGE_TTL_SEC,
       'Too many demo verification attempts. Request a new OTP.',
     );
-    if (otp !== DEV_OTP) {
+    const expectedOtp = this.temporaryDemoOtp(challenge.autoNumber);
+    if (!this.matchesOtp(otp, expectedOtp)) {
+      this.logger.warn(
+        `Temporary demo OTP verification failed for ${challenge.autoNumber}`,
+      );
       throw new UnauthorizedException('Invalid OTP');
     }
 
@@ -831,6 +868,9 @@ export class AuthService {
         );
       }
     }
+    this.logger.log(
+      `Temporary demo OTP login succeeded for ${session.operator.autoNumber}`,
+    );
     return session;
   }
 
@@ -856,12 +896,16 @@ export class AuthService {
     if (!this.supabase.isConfigured) {
       throw new UnauthorizedException('Demo vehicle registry is unavailable');
     }
+    if (!this.temporaryDemoAuthEnabled(claims.autoNumber)) {
+      throw new UnauthorizedException('Demo vehicle is no longer enabled');
+    }
     const vehicle = await this.findVehicle(claims.autoNumber);
     if (
       !vehicle ||
       vehicle.id !== claims.vehicleId ||
       vehicle.status !== 'active' ||
-      normalizeAutoNumber(vehicle.autoNumber) !== TEMP_DEMO_AUTONUMBER
+      normalizeAutoNumber(vehicle.autoNumber) !==
+        normalizeAutoNumber(claims.autoNumber)
     ) {
       throw new UnauthorizedException('Demo vehicle is no longer active');
     }
@@ -875,6 +919,13 @@ export class AuthService {
       operator.id,
       vehicle.id,
     );
+    if (normalizeAutoNumber(vehicle.autoNumber) !== TEMP_DEMO_AUTONUMBER) {
+      await this.assertRegisteredDisplayDevice(
+        vehicle.id,
+        screen.id,
+        vehicle.autoNumber,
+      );
+    }
     if (screen.id !== claims.screenId) {
       throw new UnauthorizedException('Demo screen assignment has changed');
     }

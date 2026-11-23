@@ -647,7 +647,7 @@ describe('AuthService demo OTP vehicle flow', () => {
     },
   );
 
-  it('validates each configured demo OTP only against its registered vehicle', async () => {
+  it('validates each configured demo OTP only against its registered vehicle without Redis', async () => {
     const demoCredentials = [
       ['KA01AB0001', '481205', '528314', 'CMS_DEMO_OTP_KA01AB0001'],
       ['KA01AB0002', '528314', '639425', 'CMS_DEMO_OTP_KA01AB0002'],
@@ -668,8 +668,14 @@ describe('AuthService demo OTP vehicle flow', () => {
 
       const tables = registeredVehicleRows();
       tables.cms_vehicles[0].auto_number = autoNumber;
-      const { auth, signInWithOtp, verifyOtp, ensureDevDemoAdsIfEmpty } =
-        createAuthHarness(settings, tables);
+      const {
+        auth,
+        redis,
+        signInWithOtp,
+        verifyOtp,
+        ensureDevDemoAdsIfEmpty,
+      } = createAuthHarness(settings, tables);
+      redis.isAvailable = false;
 
       const lookup = await auth.lookupAutoNumber(autoNumber);
       expect(lookup.devMode).toBe(true);
@@ -685,9 +691,12 @@ describe('AuthService demo OTP vehicle flow', () => {
       ).rejects.toThrow('Invalid OTP');
       const session = await auth.verifyOtp(lookup.challengeId, otp);
       expect(session.operator.autoNumber).toBe(autoNumber);
-      expect(session.accessToken).toMatch(/^dev\.operator-1\./);
+      expect(session.accessToken).toMatch(/^cms-demo-session\./);
       expect(ensureDevDemoAdsIfEmpty).toHaveBeenCalledWith('screen-1');
       expect(verifyOtp).not.toHaveBeenCalled();
+      expect(redis.get).not.toHaveBeenCalled();
+      expect(redis.set).not.toHaveBeenCalled();
+      expect(redis.incrementWithTtl).not.toHaveBeenCalled();
       expect(settings[envKey]).toBe(otp);
     }
   });
@@ -712,7 +721,7 @@ describe('AuthService demo OTP vehicle flow', () => {
     try {
       await expect(
         auth.verifyOtp(lookup.challengeId, '481205'),
-      ).rejects.toThrow('OTP expired — request a new code');
+      ).rejects.toThrow('Invalid or expired demo session');
     } finally {
       clock.mockRestore();
     }
@@ -738,7 +747,7 @@ describe('AuthService demo OTP vehicle flow', () => {
     }
     await expect(
       auth.verifyOtp(lookup.challengeId, '481205'),
-    ).rejects.toThrow('OTP challenge expired or invalid');
+    ).rejects.toThrow('Too many demo verification attempts');
   });
 
   it('rate limits configured demo OTP lookups for each vehicle', async () => {
@@ -757,9 +766,10 @@ describe('AuthService demo OTP vehicle flow', () => {
       await auth.lookupAutoNumber('KA01AB0001');
     }
     await expect(auth.lookupAutoNumber('KA01AB0001')).rejects.toThrow(
-      'Too many OTP requests for this vehicle',
+      'Too many demo OTP requests',
     );
-    expect(redis.incrementWithTtl).toHaveBeenCalledTimes(6);
+    expect(redis.incrementWithTtl).not.toHaveBeenCalled();
+    expect(redis.set).not.toHaveBeenCalled();
   });
 
   it('does not issue a configured demo challenge for an unregistered vehicle', async () => {
