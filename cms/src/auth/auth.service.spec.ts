@@ -354,24 +354,61 @@ describe('AuthService demo OTP vehicle flow', () => {
     );
   });
 
-  it('rejects Production sessions for a revoked registered display device', async () => {
+  it.each(['revoked', 'inactive'])(
+    'allows KA01AB0000 CMS PWA sessions when the Admin display device is %s',
+    async (lifecycleStatus) => {
+      const tables = registeredVehicleRows();
+      tables.cms_vehicles[0].auto_number = 'KA01AB0000';
+      tables.admin_dm_devices[0].lifecycle_status = lifecycleStatus;
+      const { auth } = createAuthHarness(
+        {
+          CMS_DEMO_AUTH: 'true',
+          NODE_ENV: 'production',
+          VERCEL_ENV: 'production',
+          SUPABASE_SERVICE_ROLE_KEY: 'test-server-key',
+        },
+        tables,
+      );
+      const lookup = await auth.lookupAutoNumber('KA01AB0000');
+      const session = await auth.verifyOtp(lookup.challengeId, '123456');
+
+      expect(session.operator.autoNumber).toBe('KA01AB0000');
+      const resolved = await auth.resolveSession(session.accessToken);
+      expect(resolved.operator.autoNumber).toBe('KA01AB0000');
+    },
+  );
+
+  it('continues rejecting regular Production sessions for a revoked display device', async () => {
     const tables = registeredVehicleRows();
-    tables.cms_vehicles[0].auto_number = 'KA01AB0000';
+    tables.cms_vehicles[0].auto_number = 'KA01AB5555';
+    tables.cms_vehicles[0].registered_mobile = '9876543210';
+    tables.cms_vehicles[0].mobile_e164 = '+919876543210';
     tables.admin_dm_devices[0].lifecycle_status = 'revoked';
-    const { auth } = createAuthHarness(
+    const { auth, verifyOtp } = createAuthHarness(
       {
-        CMS_DEMO_AUTH: 'true',
+        CMS_DEMO_AUTH: 'false',
+        CMS_DEV_AUTH: 'false',
         NODE_ENV: 'production',
         VERCEL_ENV: 'production',
-        SUPABASE_SERVICE_ROLE_KEY: 'test-server-key',
       },
       tables,
     );
-    const lookup = await auth.lookupAutoNumber('KA01AB0000');
+    const lookup = await auth.lookupAutoNumber('KA01AB5555');
+    verifyOtp.mockResolvedValue({
+      data: {
+        session: {
+          access_token: 'sms-session-token',
+          refresh_token: 'sms-refresh-token',
+          expires_in: 3600,
+          user: { id: 'auth-user-1' },
+        },
+      },
+      error: null,
+    });
 
-    await expect(auth.verifyOtp(lookup.challengeId, '123456')).rejects.toThrow(
-      'Registered display device is revoked or inactive',
-    );
+    await expect(
+      auth.verifyOtp(lookup.challengeId, '654321'),
+    ).rejects.toThrow('Registered display device is revoked or inactive');
   });
 
   it('supports the temporary Production demo flow without Redis or Supabase SMS', async () => {

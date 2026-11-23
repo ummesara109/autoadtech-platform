@@ -104,6 +104,12 @@ The four new challenges require a reachable shared `REDIS_URL`. The existing
 the demo mode after testing with `CMS_DEMO_AUTH=false` and redeploy. The
 Supabase service-role/secret key must remain server-side.
 
+The temporary `KA01AB0000` Production CMS PWA session does not validate the
+Admin display-device mapping or lifecycle status. It still requires the active
+CMS vehicle, operator, and assigned active screen. The four additional demo OTP
+flows and normal Production SMS sessions continue to require an active
+Admin-device mapping.
+
 Production demo playback is separate from demo authentication. After successful
 authentication, the existing two-ad demo rotation
 (`/test-ad-restaurant.mp4` and `/ad2-bbq-catering.mp4`) may be seeded only for

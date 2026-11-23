@@ -875,11 +875,6 @@ export class AuthService {
       operator.id,
       vehicle.id,
     );
-    await this.assertRegisteredDisplayDevice(
-      vehicle.id,
-      screen.id,
-      vehicle.autoNumber,
-    );
     if (screen.id !== claims.screenId) {
       throw new UnauthorizedException('Demo screen assignment has changed');
     }
