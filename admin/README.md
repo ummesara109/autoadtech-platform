@@ -52,7 +52,9 @@ Phone GPS / Live Monitoring remains separate (`/api/cms/gps`, `/api/live`).
 
 ## CMS demo OTP (local development and temporary Production testing)
 
-For local seeded testing, set `CMS_DEV_AUTH=true` in both `admin/.env` and `cms/.env`, then restart both servers. For temporary Production testing of only `KA01AB0000`, set `CMS_DEMO_AUTH=true` and `CMS_DEV_AUTH=false` in both Vercel projects and redeploy.
+For local seeded testing, set `CMS_DEV_AUTH=true` in both `admin/.env` and `cms/.env`, then restart both servers. For temporary Production demo authentication, set `CMS_DEMO_AUTH=true` and `CMS_DEV_AUTH=false` in both Vercel projects and redeploy. `KA01AB0000` keeps its existing OTP; configure the four additional OTP secrets only in the CMS server environment.
+
+With `CMS_DEMO_AUTH=true` in the Admin server, the existing vehicle provisioning flow permits phone-less registration only for `KA01AB0000` through `KA01AB0004`. It stores both CMS phone fields as `NULL`—not placeholder numbers—and still requires the vehicle owner name. Apply `cms/supabase/migrations/202611230003_cms_demo_vehicle_nullable_phone.sql` before provisioning these vehicles. CMS authentication keeps the original `KA01AB0000` OTP and accepts separate server-configured OTPs for the other four; with demo auth disabled, those vehicles use normal SMS OTP and require a real operator phone.
 
 Set `SUPABASE_URL` and either `SUPABASE_SERVICE_ROLE_KEY` or `SUPABASE_SECRET_KEY` server-side in both Vercel projects, pointing to the same Supabase project. Never expose the secret key through a `VITE_*` variable. Keep `ADMIN_GPS_URL` and `CMS_GPS_INGEST_KEY` configured for the existing CMS-to-Admin GPS forwarding.
 

@@ -19,6 +19,7 @@ const CMS_MIGRATIONS_HINT = [
   "2) cms/supabase/migrations/202603170001_cms_silent_gps.sql",
   "3) cms/supabase/migrations/202603140003_cms_one_screen_queue.sql",
   "4) cms/supabase/migrations/202603140004_cms_queue_media_url.sql",
+  "5) cms/supabase/migrations/202611230003_cms_demo_vehicle_nullable_phone.sql",
   "Optional seed: cms/supabase/migrations/202603140002_cms_seed_dev.sql",
   "GPS link/store (if not already): admin/sql/202603180001_cms_admin_gps.sql",
   "See docs/cms-gps-live-completion-plan.md"
@@ -42,6 +43,13 @@ const DEV_DEMO_ADS = [
   }
 ];
 const DEFAULT_CMS_DEMO_AUTONUMBERS = ["KA01AB1234", "KA02CD5678"];
+const PRODUCTION_DEMO_REGISTRATION_AUTONUMBERS = new Set([
+  "KA01AB0000",
+  "KA01AB0001",
+  "KA01AB0002",
+  "KA01AB0003",
+  "KA01AB0004"
+]);
 
 function hasSupabaseEnv() {
   return (
@@ -125,15 +133,17 @@ function demoAuthEnabled() {
   return String(process.env.CMS_DEV_AUTH || "").trim().toLowerCase() === "true";
 }
 
-function temporaryDemoAuthEnabled(autoNumber) {
+function productionDemoRegistrationEnabled(autoNumber) {
   return (
     String(process.env.CMS_DEMO_AUTH || "").trim().toLowerCase() === "true" &&
-    cmsGps.normalizeAutoNumber(autoNumber) === "KA01AB0000"
+    PRODUCTION_DEMO_REGISTRATION_AUTONUMBERS.has(
+      cmsGps.normalizeAutoNumber(autoNumber)
+    )
   );
 }
 
 function isConfiguredDemoVehicle(autoNumber) {
-  if (temporaryDemoAuthEnabled(autoNumber)) return true;
+  if (productionDemoRegistrationEnabled(autoNumber)) return true;
   const configured = process.env.CMS_DEMO_VEHICLES;
   const allowed = (configured === undefined
     ? DEFAULT_CMS_DEMO_AUTONUMBERS
@@ -186,6 +196,18 @@ function resolvePhone(db, vehicle) {
   }
 
   if (isConfiguredDemoVehicle(autoNumber)) {
+    if (
+      PRODUCTION_DEMO_REGISTRATION_AUTONUMBERS.has(
+        cmsGps.normalizeAutoNumber(autoNumber)
+      )
+    ) {
+      return {
+        registered_mobile: null,
+        mobile_e164: null,
+        phoneSource: "demo"
+      };
+    }
+
     return {
       registered_mobile: "0000000000",
       mobile_e164: "+910000000000",

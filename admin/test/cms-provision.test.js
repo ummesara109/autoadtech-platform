@@ -26,8 +26,8 @@ test("Preview demo mode provisions a vehicle without a real phone", () => {
   process.env.VERCEL_ENV = "preview";
 
   assert.deepEqual(resolvePhone({ partners: [] }, { no: "KA01AB0001" }), {
-    registered_mobile: "0000000000",
-    mobile_e164: "+910000000000",
+    registered_mobile: null,
+    mobile_e164: null,
     phoneSource: "demo"
   });
 });
@@ -69,18 +69,28 @@ test("Production demo auth provisions the two built-in demo vehicles without pho
   }
 });
 
-test("temporary Production demo mode provisions only KA01AB0000 without a phone", () => {
+test("temporary Production demo mode provisions only the five designated plates without phone placeholders", () => {
   process.env.CMS_DEV_AUTH = "false";
   process.env.CMS_DEMO_AUTH = "true";
   process.env.NODE_ENV = "production";
   process.env.VERCEL_ENV = "production";
 
-  assert.equal(
-    resolvePhone({ partners: [] }, { no: "KA01 AB 0000" }).phoneSource,
-    "demo"
-  );
+  for (const no of [
+    "KA01 AB 0000",
+    "KA01AB0001",
+    "KA01AB0002",
+    "KA01AB0003",
+    "KA01AB0004"
+  ]) {
+    assert.deepEqual(resolvePhone({ partners: [] }, { no }), {
+      registered_mobile: null,
+      mobile_e164: null,
+      phoneSource: "demo"
+    });
+  }
+
   assert.throws(
-    () => resolvePhone({ partners: [] }, { no: "KA01AB0001" }),
+    () => resolvePhone({ partners: [] }, { no: "KA01AB0005" }),
     /A real operator phone number is required/
   );
 });
@@ -98,17 +108,22 @@ test("turning off temporary demo mode restores phone requirement", () => {
   );
 });
 
-test("Production demo auth does not require an invalid assigned-partner phone", () => {
+test("Production demo registration does not invent a phone from an invalid assigned-partner value", () => {
   process.env.CMS_DEV_AUTH = "true";
+  process.env.CMS_DEMO_AUTH = "true";
   process.env.NODE_ENV = "production";
   process.env.VERCEL_ENV = "production";
 
-  assert.equal(
+  assert.deepEqual(
     resolvePhone(
-      { partners: [{ vehicle: "KA01AB1234", phone: "not-a-phone" }] },
-      { no: "KA01AB1234" }
-    ).phoneSource,
-    "demo"
+      { partners: [{ vehicle: "KA01AB0001", phone: "not-a-phone" }] },
+      { no: "KA01AB0001" }
+    ),
+    {
+      registered_mobile: null,
+      mobile_e164: null,
+      phoneSource: "demo"
+    }
   );
 });
 

@@ -12,7 +12,7 @@ export type OtpChallenge = {
   autoNumber: string;
   maskedMobile: string;
   mobileE164?: string;
-  otpMode?: 'local_demo' | 'sms';
+  otpMode?: 'local_demo' | 'configured_demo' | 'sms';
   expiresAt: string;
   createdAt: string;
 };

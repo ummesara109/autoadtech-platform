@@ -418,6 +418,9 @@ describe('AuthService demo OTP vehicle flow', () => {
     await expect(auth.verifyOtp(lookup.challengeId, '000000')).rejects.toThrow(
       'Invalid OTP',
     );
+    await expect(
+      auth.verifyOtp(lookup.challengeId, '481205'),
+    ).rejects.toThrow('Invalid OTP');
 
     const session = await auth.verifyOtp(lookup.challengeId, '123456');
     expect(session.accessToken).toMatch(/^cms-demo-session\./);
@@ -547,7 +550,7 @@ describe('AuthService demo OTP vehicle flow', () => {
     'KA01AB0003',
     'KA01AB0004',
   ])(
-    'keeps Production demo OTP restricted to KA01AB0000 for %s and uses the existing SMS path',
+    'uses normal Supabase SMS for %s when configured demo OTP is disabled',
     async (autoNumber) => {
       const tables = registeredVehicleRows();
       tables.cms_vehicles[0].auto_number = autoNumber;
@@ -566,7 +569,7 @@ describe('AuthService demo OTP vehicle flow', () => {
         ensureDevDemoAdsIfEmpty,
       } = createAuthHarness(
         {
-          CMS_DEMO_AUTH: 'true',
+          CMS_DEMO_AUTH: 'false',
           NODE_ENV: 'production',
           VERCEL_ENV: 'production',
           SUPABASE_SERVICE_ROLE_KEY: 'test-server-key',
@@ -604,6 +607,167 @@ describe('AuthService demo OTP vehicle flow', () => {
 
       expect(session.operator.autoNumber).toBe(autoNumber);
       expect(ensureDevDemoAdsIfEmpty).toHaveBeenCalledWith('screen-1');
+    },
+  );
+
+  it('validates each configured demo OTP only against its registered vehicle', async () => {
+    const demoCredentials = [
+      ['KA01AB0001', '481205', '528314', 'CMS_DEMO_OTP_KA01AB0001'],
+      ['KA01AB0002', '528314', '639425', 'CMS_DEMO_OTP_KA01AB0002'],
+      ['KA01AB0003', '639425', '740536', 'CMS_DEMO_OTP_KA01AB0003'],
+      ['KA01AB0004', '740536', '481205', 'CMS_DEMO_OTP_KA01AB0004'],
+    ] as const;
+
+    for (const [autoNumber, otp, otherVehicleOtp, envKey] of demoCredentials) {
+      const settings: Record<string, string> = {
+        CMS_DEMO_AUTH: 'true',
+        NODE_ENV: 'production',
+        VERCEL_ENV: 'production',
+        SUPABASE_SERVICE_ROLE_KEY: 'test-server-key',
+      };
+      for (const [, configuredOtp, , configuredEnvKey] of demoCredentials) {
+        settings[configuredEnvKey] = configuredOtp;
+      }
+
+      const tables = registeredVehicleRows();
+      tables.cms_vehicles[0].auto_number = autoNumber;
+      const { auth, signInWithOtp, verifyOtp, ensureDevDemoAdsIfEmpty } =
+        createAuthHarness(settings, tables);
+
+      const lookup = await auth.lookupAutoNumber(autoNumber);
+      expect(lookup.devMode).toBe(true);
+      expect(lookup.maskedMobile).toBe('Demo OTP');
+      expect(JSON.stringify(lookup)).not.toContain(otp);
+      expect(signInWithOtp).not.toHaveBeenCalled();
+      const resend = await auth.resendOtp(lookup.challengeId);
+      expect(resend.message).toBe('Demo OTP ready');
+      expect(JSON.stringify(resend)).not.toContain(otp);
+
+      await expect(
+        auth.verifyOtp(lookup.challengeId, otherVehicleOtp),
+      ).rejects.toThrow('Invalid OTP');
+      const session = await auth.verifyOtp(lookup.challengeId, otp);
+      expect(session.operator.autoNumber).toBe(autoNumber);
+      expect(session.accessToken).toMatch(/^dev\.operator-1\./);
+      expect(ensureDevDemoAdsIfEmpty).toHaveBeenCalledWith('screen-1');
+      expect(verifyOtp).not.toHaveBeenCalled();
+      expect(settings[envKey]).toBe(otp);
+    }
+  });
+
+  it('expires configured demo challenges after five minutes', async () => {
+    const tables = registeredVehicleRows();
+    const { auth } = createAuthHarness(
+      {
+        CMS_DEMO_AUTH: 'true',
+        CMS_DEMO_OTP_KA01AB0001: '481205',
+        NODE_ENV: 'production',
+        VERCEL_ENV: 'production',
+        SUPABASE_SERVICE_ROLE_KEY: 'test-server-key',
+      },
+      tables,
+    );
+    const lookup = await auth.lookupAutoNumber('KA01AB0001');
+    const clock = jest
+      .spyOn(Date, 'now')
+      .mockReturnValue(Date.parse(lookup.expiresAt) + 1);
+
+    try {
+      await expect(
+        auth.verifyOtp(lookup.challengeId, '481205'),
+      ).rejects.toThrow('OTP expired — request a new code');
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('locks a configured demo challenge after five incorrect OTP attempts', async () => {
+    const { auth } = createAuthHarness(
+      {
+        CMS_DEMO_AUTH: 'true',
+        CMS_DEMO_OTP_KA01AB0001: '481205',
+        NODE_ENV: 'production',
+        VERCEL_ENV: 'production',
+        SUPABASE_SERVICE_ROLE_KEY: 'test-server-key',
+      },
+      registeredVehicleRows(),
+    );
+    const lookup = await auth.lookupAutoNumber('KA01AB0001');
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await expect(
+        auth.verifyOtp(lookup.challengeId, '000000'),
+      ).rejects.toThrow('Invalid OTP');
+    }
+    await expect(
+      auth.verifyOtp(lookup.challengeId, '481205'),
+    ).rejects.toThrow('OTP challenge expired or invalid');
+  });
+
+  it('rate limits configured demo OTP lookups for each vehicle', async () => {
+    const { auth, redis } = createAuthHarness(
+      {
+        CMS_DEMO_AUTH: 'true',
+        CMS_DEMO_OTP_KA01AB0001: '481205',
+        NODE_ENV: 'production',
+        VERCEL_ENV: 'production',
+        SUPABASE_SERVICE_ROLE_KEY: 'test-server-key',
+      },
+      registeredVehicleRows(),
+    );
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await auth.lookupAutoNumber('KA01AB0001');
+    }
+    await expect(auth.lookupAutoNumber('KA01AB0001')).rejects.toThrow(
+      'Too many OTP requests for this vehicle',
+    );
+    expect(redis.incrementWithTtl).toHaveBeenCalledTimes(6);
+  });
+
+  it('does not issue a configured demo challenge for an unregistered vehicle', async () => {
+    const { auth, redis, signInWithOtp } = createAuthHarness(
+      {
+        CMS_DEMO_AUTH: 'true',
+        CMS_DEMO_OTP_KA01AB0004: '740536',
+        NODE_ENV: 'production',
+        VERCEL_ENV: 'production',
+        SUPABASE_SERVICE_ROLE_KEY: 'test-server-key',
+      },
+      registeredVehicleRows(),
+    );
+
+    await expect(auth.lookupAutoNumber('KA01AB0004')).rejects.toThrow(
+      'No registered vehicle found for this Auto Number',
+    );
+    expect(redis.set).not.toHaveBeenCalled();
+    expect(signInWithOtp).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'KA01AB0001',
+    'KA01AB0002',
+    'KA01AB0003',
+    'KA01AB0004',
+  ])(
+    'fails closed when the configured demo OTP is missing for %s',
+    async (autoNumber) => {
+      const tables = registeredVehicleRows();
+      tables.cms_vehicles[0].auto_number = autoNumber;
+      const { auth, signInWithOtp } = createAuthHarness(
+        {
+          CMS_DEMO_AUTH: 'true',
+          NODE_ENV: 'production',
+          VERCEL_ENV: 'production',
+          SUPABASE_SERVICE_ROLE_KEY: 'test-server-key',
+        },
+        tables,
+      );
+
+      await expect(auth.lookupAutoNumber(autoNumber)).rejects.toThrow(
+        'Demo OTP configuration is unavailable on the CMS server',
+      );
+      expect(signInWithOtp).not.toHaveBeenCalled();
     },
   );
 

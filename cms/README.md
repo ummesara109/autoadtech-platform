@@ -83,23 +83,34 @@ Admin display device and the vehicle's active CMS screen. No vehicle, device,
 operator, or screen is created by login. Disable the option with
 `CMS_LOCAL_AUTO_NUMBER_AUTH=false` when finished.
 
-For temporary Production testing of only `KA01AB0000`, set `CMS_DEMO_AUTH=true` in
-both the CMS and Admin Vercel projects. The vehicle must still exist in the
-configured Supabase registry and have an active operator and assigned screen. This
-mode verifies the test OTP on the CMS backend, sends no SMS, and uses a signed,
-short-lived session in an HttpOnly cookie. The cookie is not returned to browser
-JavaScript, and the test OTP is not displayed in the UI. It does not create a
-Supabase Auth token or require Redis. Disable it after testing with
-`CMS_DEMO_AUTH=false` and redeploy. Keep `CMS_DEV_AUTH=false` in Production; it
-does not enable this temporary mode. The Supabase service-role/secret key must
-remain server-side.
+For temporary Production testing, set `CMS_DEMO_AUTH=true` in both the CMS and
+Admin Vercel projects. The existing `KA01AB0000` flow and OTP are unchanged. For
+`KA01AB0001`–`KA01AB0004`, configure the matching server-only CMS environment
+variables `CMS_DEMO_OTP_KA01AB0001`, `CMS_DEMO_OTP_KA01AB0002`,
+`CMS_DEMO_OTP_KA01AB0003`, and `CMS_DEMO_OTP_KA01AB0004` with six-digit values.
+Do not put these variables in `VITE_*` settings, frontend code, or API responses.
+The CMS checks each secret only against a challenge bound to that registered
+vehicle; unset or malformed values fail closed. Keep `CMS_DEV_AUTH=false` in
+Production.
+
+All five vehicles must exist in the configured Supabase registry and have an
+active operator and exactly one assigned active CMS screen. The four new
+challenges expire after five minutes, use shared Redis rate limits, and lock
+after five incorrect codes. Their issue, failure, expiry, lockout, and success
+events are written to CMS server logs without logging OTP values. They use the
+existing CMS session and GPS flow; no Supabase SMS is sent for these challenges.
+The four new challenges require a reachable shared `REDIS_URL`. The existing
+`KA01AB0000` flow remains signed/stateless and does not require Redis. Disable
+the demo mode after testing with `CMS_DEMO_AUTH=false` and redeploy. The
+Supabase service-role/secret key must remain server-side.
 
 Production demo playback is separate from demo authentication. After successful
 authentication, the existing two-ad demo rotation
 (`/test-ad-restaurant.mp4` and `/ad2-bbq-catering.mp4`) may be seeded only for
 `KA01AB0000`–`KA01AB0004`, and only when that vehicle's already-assigned screen
-has no playing or queued ad. `KA01AB0001`–`KA01AB0004` continue to use normal SMS
-OTP in Production; `CMS_DEMO_VEHICLES` does not enable the fixed demo OTP there.
+has no playing or queued ad. `KA01AB0001`–`KA01AB0004` use their configured demo OTP only while
+`CMS_DEMO_AUTH=true`; with the flag off, they continue through normal SMS OTP.
+`CMS_DEMO_VEHICLES` does not enable Production demo OTP.
 This does not create vehicle, device, or screen mappings.
 
 ## Production build and run
@@ -173,9 +184,10 @@ builds.
 | `SUPABASE_SERVICE_ROLE_KEY` / `SUPABASE_SECRET_KEY` | Server-side Supabase access |
 | `CMS_DEV_AUTH` | Local/Preview seed authentication; keep `false` in Production |
 | `CMS_LOCAL_AUTO_NUMBER_AUTH` | Extra local-only OTP mode for existing registered vehicles; requires `NODE_ENV=development`, `CMS_DEV_AUTH=true`, and no Vercel environment |
-| `CMS_DEMO_AUTH` | Set to `true` in Admin and CMS Production only for temporary `KA01AB0000` demo OTP; set `false` and redeploy to disable |
+| `CMS_DEMO_AUTH` | Temporary demo OTP switch for the five designated plates; set `false` and redeploy to disable |
+| `CMS_DEMO_OTP_KA01AB0001`–`CMS_DEMO_OTP_KA01AB0004` | Server-only six-digit OTP secrets for the four additional registered demo vehicles |
 | `CMS_DEMO_VEHICLES` | Optional comma-separated demo plate allowlist; defaults to `KA01AB1234,KA02CD5678` |
-| `REDIS_URL` | Shared OTP/session/dashboard cache; required for live SMS OTP, not for the isolated `KA01AB0000` demo flow |
+| `REDIS_URL` | Shared OTP/session/dashboard cache; required for SMS OTP and the four additional demo challenges, not for the isolated `KA01AB0000` demo flow |
 | `CMS_INTERNAL_KEY` | Protects internal ad-queue endpoints |
 | `ADMIN_GPS_URL` / `ADMIN_API_URL` | Admin API origin for CMS GPS forwarding |
 | `CMS_GPS_INGEST_KEY` | Server-to-server Admin ingest key |
@@ -188,13 +200,16 @@ builds.
 Never commit `.env` or expose Supabase/Admin secrets through a `VITE_*` variable.
 
 For temporary Production demo OTP, set `CMS_DEMO_AUTH=true` and `CMS_DEV_AUTH=false`
-in the **Production** environment of both Vercel projects. The Admin backend uses
-the flag to allow phone-less provisioning of only `KA01AB0000`; the CMS backend
-reads it at runtime through Nest `ConfigModule`. The authenticated session is a
-signed, short-lived HttpOnly cookie scoped to `/api`; use the same-origin Vercel
-API route so the browser sends it with CMS requests. Redeploy both projects
-after changing environment variables. After testing, set `CMS_DEMO_AUTH=false`
-and redeploy to disable this login path before real drivers use the app.
+in the **Production** environment of both Vercel projects. Set the four
+`CMS_DEMO_OTP_KA01AB0001` through `CMS_DEMO_OTP_KA01AB0004` values only in CMS
+server environment settings; keep them out of Admin frontend/build variables.
+The Admin backend uses `CMS_DEMO_AUTH` for phone-less provisioning of the five
+designated plates; the CMS backend reads the flag and OTP secrets at runtime
+through Nest `ConfigModule`. The existing KA01AB0000 flow uses its signed,
+short-lived HttpOnly cookie; the four additional vehicles use the existing
+Redis-backed CMS challenge/session flow. Redeploy both projects after changing
+environment variables. After testing, set `CMS_DEMO_AUTH=false` and redeploy to
+disable these demo login paths before real drivers use the app.
 Provide `SUPABASE_URL` and either `SUPABASE_SERVICE_ROLE_KEY` or
 `SUPABASE_SECRET_KEY` server-side in both projects, pointing to the same project.
 The CMS project needs a reachable shared `REDIS_URL` for live SMS OTP and its

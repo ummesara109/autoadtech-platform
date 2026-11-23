@@ -27,6 +27,13 @@ const SESSION_CACHE_TTL_SEC = 15 * 60;
 const SESSION_REVALIDATE_MS = 30_000;
 const DEFAULT_DEMO_AUTONUMBERS = ['KA01AB1234', 'KA02CD5678'];
 const TEMP_DEMO_AUTONUMBER = 'KA01AB0000';
+const ADDITIONAL_DEMO_OTP_ENV_KEYS: Record<string, string> = {
+  KA01AB0001: 'CMS_DEMO_OTP_KA01AB0001',
+  KA01AB0002: 'CMS_DEMO_OTP_KA01AB0002',
+  KA01AB0003: 'CMS_DEMO_OTP_KA01AB0003',
+  KA01AB0004: 'CMS_DEMO_OTP_KA01AB0004',
+};
+const MAX_CONFIGURED_DEMO_OTP_ATTEMPTS = 5;
 const DEMO_PLAYBACK_AUTONUMBERS = [
   'KA01AB0000',
   'KA01AB0001',
@@ -154,13 +161,46 @@ export class AuthService {
     );
   }
 
+  private additionalDemoOtpEnvKey(autoNumber: string) {
+    if (
+      this.config.get<string>('CMS_DEMO_AUTH')?.trim().toLowerCase() !==
+      'true'
+    ) {
+      return undefined;
+    }
+    return ADDITIONAL_DEMO_OTP_ENV_KEYS[normalizeAutoNumber(autoNumber)];
+  }
+
+  private configuredAdditionalDemoOtp(autoNumber: string) {
+    const envKey = this.additionalDemoOtpEnvKey(autoNumber);
+    if (!envKey) {
+      throw new UnauthorizedException('Demo OTP is no longer enabled');
+    }
+
+    const otp = this.config.get<string>(envKey)?.trim();
+    if (!otp || !/^\d{6}$/.test(otp)) {
+      throw new ServiceUnavailableException(
+        'Demo OTP configuration is unavailable on the CMS server.',
+      );
+    }
+    return otp;
+  }
+
+  private matchesOtp(provided: string, expected: string) {
+    if (!/^\d{6}$/.test(provided) || !/^\d{6}$/.test(expected)) return false;
+    return timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
+  }
+
   private isDesignatedDemoPlaybackVehicle(autoNumber: string) {
     return DEMO_PLAYBACK_AUTONUMBERS.includes(normalizeAutoNumber(autoNumber));
   }
 
   private demoOtpEnabledForVehicle(autoNumber: string) {
     if (this.isProductionDeployment()) {
-      return this.temporaryDemoAuthEnabled(autoNumber);
+      return (
+        this.temporaryDemoAuthEnabled(autoNumber) ||
+        Boolean(this.additionalDemoOtpEnvKey(autoNumber))
+      );
     }
     return this.demoAuthRequested() && this.isConfiguredDemoVehicle(autoNumber);
   }
@@ -407,8 +447,15 @@ export class AuthService {
       );
     }
     const otpMode = localDemo ? 'local_demo' : 'sms';
+    const configuredDemoOtp =
+      !temporaryDemo &&
+      Boolean(this.additionalDemoOtpEnvKey(vehicle.autoNumber));
+    const effectiveOtpMode = configuredDemoOtp ? 'configured_demo' : otpMode;
+    if (effectiveOtpMode === 'configured_demo') {
+      this.configuredAdditionalDemoOtp(vehicle.autoNumber);
+    }
     const operatorPhone = normalizeIndianPhone(vehicle.mobileE164);
-    if (otpMode === 'sms' && !operatorPhone) {
+    if (effectiveOtpMode === 'sms' && !operatorPhone) {
       throw new BadRequestException(
         'No valid Indian operator phone is provisioned for this vehicle. Add it to the vehicle or its assigned partner in Admin.',
       );
@@ -420,7 +467,7 @@ export class AuthService {
       'Too many OTP requests for this vehicle. Wait one minute and try again.',
     );
 
-    const demoMode = otpMode !== 'sms';
+    const demoMode = effectiveOtpMode !== 'sms';
     const masked = demoMode
       ? 'Demo OTP'
       : maskMobile(operatorPhone?.nationalNumber ?? '');
@@ -434,8 +481,8 @@ export class AuthService {
       autoNumber: vehicle.autoNumber,
       maskedMobile: masked,
       mobileE164:
-        otpMode === 'local_demo' ? undefined : operatorPhone?.mobileE164,
-      otpMode,
+        effectiveOtpMode === 'sms' ? operatorPhone?.mobileE164 : undefined,
+      otpMode: effectiveOtpMode,
       expiresAt: expiresAt.toISOString(),
       createdAt: new Date().toISOString(),
     };
@@ -448,7 +495,13 @@ export class AuthService {
 
     await this.startOtp(challenge);
 
-    if (this.supabase.isConfigured && otpMode !== 'local_demo') {
+    if (effectiveOtpMode === 'configured_demo') {
+      this.logger.log(
+        `Configured demo OTP challenge issued for ${vehicle.autoNumber}`,
+      );
+    }
+
+    if (this.supabase.isConfigured && effectiveOtpMode === 'sms') {
       try {
         const { error } = await this.supabase.client
           .from('cms_otp_challenges')
@@ -512,6 +565,11 @@ export class AuthService {
       throw new BadRequestException('OTP challenge expired or invalid');
     }
     if (new Date(challenge.expiresAt).getTime() < Date.now()) {
+      if (challenge.otpMode === 'configured_demo') {
+        this.logger.warn(
+          `Configured demo OTP challenge expired for ${challenge.autoNumber}`,
+        );
+      }
       throw new BadRequestException('OTP challenge expired');
     }
     await this.enforceOtpRateLimit(
@@ -521,12 +579,26 @@ export class AuthService {
       'Too many resend requests. Wait one minute before trying again.',
     );
     await this.startOtp(challenge);
+    const otpMode = this.challengeOtpMode(challenge);
+    if (otpMode === 'configured_demo') {
+      this.logger.log(
+        `Configured demo OTP challenge resent for ${challenge.autoNumber}`,
+      );
+      return {
+        challengeId,
+        maskedMobile: challenge.maskedMobile,
+        expiresAt: challenge.expiresAt,
+        message: 'Demo OTP ready',
+        devMode: true,
+        localDevelopmentAuth: false,
+      };
+    }
     return {
       challengeId,
       maskedMobile: challenge.maskedMobile,
       expiresAt: challenge.expiresAt,
       message: 'OTP resent',
-      devMode: this.challengeOtpMode(challenge) !== 'sms',
+      devMode: otpMode !== 'sms',
       localDevelopmentAuth: this.localAutoNumberAuthEnabled(),
     };
   }
@@ -542,9 +614,15 @@ export class AuthService {
       throw new BadRequestException('OTP challenge expired or invalid');
     }
     if (new Date(challenge.expiresAt).getTime() < Date.now()) {
+      if (challenge.otpMode === 'configured_demo') {
+        this.logger.warn(
+          `Configured demo OTP challenge expired for ${challenge.autoNumber}`,
+        );
+      }
       await this.redis.del(this.challengeKey(challengeId));
       throw new BadRequestException('OTP expired — request a new code');
     }
+    const otpMode = this.challengeOtpMode(challenge);
     const verifyRateKey = this.rateLimitKey('verify', challengeId);
     await this.enforceOtpRateLimit(
       verifyRateKey,
@@ -558,8 +636,35 @@ export class AuthService {
     let expiresIn: number | undefined;
     let authUserId: string | undefined;
 
-    const otpMode = this.challengeOtpMode(challenge);
-    if (otpMode === 'local_demo') {
+    if (otpMode === 'configured_demo') {
+      const expectedOtp = this.configuredAdditionalDemoOtp(
+        challenge.autoNumber,
+      );
+      if (!this.matchesOtp(otp, expectedOtp)) {
+        const invalidAttemptKey = this.rateLimitKey(
+          'demo-invalid',
+          challengeId,
+        );
+        const attempts = await this.redis.incrementWithTtl(
+          invalidAttemptKey,
+          CHALLENGE_TTL_SEC,
+        );
+        this.logger.warn(
+          `Configured demo OTP verification failed for ${challenge.autoNumber}`,
+        );
+        if (attempts >= MAX_CONFIGURED_DEMO_OTP_ATTEMPTS) {
+          await this.redis.del(this.challengeKey(challengeId));
+          await this.redis.del(verifyRateKey);
+          this.logger.warn(
+            `Configured demo OTP challenge locked after maximum attempts for ${challenge.autoNumber}`,
+          );
+        }
+        throw new UnauthorizedException('Invalid OTP');
+      }
+      accessToken = `dev.${challenge.operatorId}.${randomUUID()}`;
+      expiresIn = 60 * 60;
+      authUserId = `dev-user-${challenge.operatorId}`;
+    } else if (otpMode === 'local_demo') {
       if (!this.localDemoOtpEnabledForVehicle(challenge.autoNumber)) {
         throw new UnauthorizedException('Demo OTP is no longer enabled');
       }
@@ -618,6 +723,7 @@ export class AuthService {
 
     await this.redis.del(this.challengeKey(challengeId));
     await this.redis.del(verifyRateKey);
+    await this.redis.del(this.rateLimitKey('demo-invalid', challengeId));
 
     const operator = await this.findOperatorById(challenge.operatorId);
     const vehicle = await this.findVehicleById(challenge.vehicleId);
@@ -671,6 +777,12 @@ export class AuthService {
           `Demo queue seed skipped: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
+    }
+
+    if (otpMode === 'configured_demo') {
+      this.logger.log(
+        `Configured demo OTP login succeeded for ${session.operator.autoNumber}`,
+      );
     }
 
     return session;
@@ -1056,6 +1168,10 @@ export class AuthService {
 
   private async startOtp(challenge: OtpChallenge) {
     const otpMode = this.challengeOtpMode(challenge);
+    if (otpMode === 'configured_demo') {
+      this.configuredAdditionalDemoOtp(challenge.autoNumber);
+      return;
+    }
     if (otpMode === 'local_demo') {
       if (!this.localDemoOtpEnabledForVehicle(challenge.autoNumber)) {
         throw new UnauthorizedException('Demo OTP is not enabled');
