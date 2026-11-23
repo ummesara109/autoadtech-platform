@@ -43,12 +43,15 @@ const DEV_DEMO_ADS = [
   }
 ];
 const DEFAULT_CMS_DEMO_AUTONUMBERS = ["KA01AB1234", "KA02CD5678"];
-const PRODUCTION_DEMO_REGISTRATION_AUTONUMBERS = new Set([
-  "KA01AB0000",
+const ADDITIONAL_DEMO_REGISTRATION_AUTONUMBERS = new Set([
   "KA01AB0001",
   "KA01AB0002",
   "KA01AB0003",
   "KA01AB0004"
+]);
+const PHONELESS_DEMO_REGISTRATION_AUTONUMBERS = new Set([
+  "KA01AB0000",
+  ...ADDITIONAL_DEMO_REGISTRATION_AUTONUMBERS
 ]);
 
 function hasSupabaseEnv() {
@@ -136,13 +139,15 @@ function demoAuthEnabled() {
 function productionDemoRegistrationEnabled(autoNumber) {
   return (
     String(process.env.CMS_DEMO_AUTH || "").trim().toLowerCase() === "true" &&
-    PRODUCTION_DEMO_REGISTRATION_AUTONUMBERS.has(
-      cmsGps.normalizeAutoNumber(autoNumber)
-    )
+    cmsGps.normalizeAutoNumber(autoNumber) === "KA01AB0000"
   );
 }
 
 function isConfiguredDemoVehicle(autoNumber) {
+  const normalizedAutoNumber = cmsGps.normalizeAutoNumber(autoNumber);
+  if (ADDITIONAL_DEMO_REGISTRATION_AUTONUMBERS.has(normalizedAutoNumber)) {
+    return true;
+  }
   if (productionDemoRegistrationEnabled(autoNumber)) return true;
   const configured = process.env.CMS_DEMO_VEHICLES;
   const allowed = (configured === undefined
@@ -197,7 +202,7 @@ function resolvePhone(db, vehicle) {
 
   if (isConfiguredDemoVehicle(autoNumber)) {
     if (
-      PRODUCTION_DEMO_REGISTRATION_AUTONUMBERS.has(
+      PHONELESS_DEMO_REGISTRATION_AUTONUMBERS.has(
         cmsGps.normalizeAutoNumber(autoNumber)
       )
     ) {

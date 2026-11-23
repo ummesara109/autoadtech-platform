@@ -95,6 +95,36 @@ test("temporary Production demo mode provisions only the five designated plates 
   );
 });
 
+test("the four additional demo plates allow phone-less registration without enabling demo login", () => {
+  process.env.CMS_DEV_AUTH = "false";
+  process.env.CMS_DEMO_AUTH = "false";
+  process.env.CMS_DEMO_VEHICLES = "";
+  process.env.NODE_ENV = "production";
+  process.env.VERCEL_ENV = "production";
+
+  for (const no of [
+    "KA01AB0001",
+    "KA01AB0002",
+    "KA01AB0003",
+    "KA01AB0004"
+  ]) {
+    assert.deepEqual(resolvePhone({ partners: [] }, { no }), {
+      registered_mobile: null,
+      mobile_e164: null,
+      phoneSource: "demo"
+    });
+  }
+
+  assert.throws(
+    () => resolvePhone({ partners: [] }, { no: "KA01AB0005" }),
+    /A real operator phone number is required/
+  );
+  assert.throws(
+    () => resolvePhone({ partners: [] }, { no: "KA01AB0000" }),
+    /A real operator phone number is required/
+  );
+});
+
 test("turning off temporary demo mode restores phone requirement", () => {
   process.env.CMS_DEV_AUTH = "false";
   process.env.CMS_DEMO_AUTH = "false";
@@ -133,7 +163,7 @@ test("Production demo auth rejects vehicles outside the configured allowlist", (
   process.env.VERCEL_ENV = "production";
 
   assert.throws(
-    () => resolvePhone({ partners: [] }, { no: "KA01AB0001" }),
+    () => resolvePhone({ partners: [] }, { no: "KA01AB0005" }),
     /A real operator phone number is required/
   );
 });
