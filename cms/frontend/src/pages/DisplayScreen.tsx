@@ -7,11 +7,8 @@ import {
   loadSession,
 } from '../lib/session';
 import {
-  getSilentGpsError,
-  getSilentGpsStatus,
   startSilentGps,
   stopSilentGps,
-  type SilentGpsStatus,
 } from '../lib/silentGps';
 import {
   advanceOfflineSnapshot,
@@ -160,9 +157,6 @@ export function DisplayScreen() {
   });
   const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
   const [mediaError, setMediaError] = useState(false);
-  const [gpsError, setGpsError] = useState(getSilentGpsError);
-  const [gpsStatus, setGpsStatus] =
-    useState<SilentGpsStatus>(getSilentGpsStatus);
   const [activeSlot, setActiveSlot] = useState<0 | 1>(0);
   const [slotSrc, setSlotSrc] = useState<[string | null, string | null]>([
     null,
@@ -180,20 +174,6 @@ export function DisplayScreen() {
       : false,
   );
 
-  useEffect(() => {
-    const onGpsStatus = (event: Event) => {
-      const detail = (
-        event as CustomEvent<{
-          status: SilentGpsStatus;
-          error: string | null;
-        }>
-      ).detail;
-      setGpsStatus(detail.status);
-      setGpsError(detail.error);
-    };
-    window.addEventListener('niyoads:gps-status', onGpsStatus);
-    return () => window.removeEventListener('niyoads:gps-status', onGpsStatus);
-  }, []);
   const rotateStage = viewportPortrait && searchParams.get('noRotate') !== '1';
 
   function applyDashboard(dash: DashboardResponse) {
@@ -1022,30 +1002,6 @@ export function DisplayScreen() {
           </div>
         ) : null}
       </div>
-
-      {gpsError ? (
-        <div
-          className="pointer-events-none absolute inset-x-3 bottom-3 z-20 mx-auto max-w-xl rounded-lg border border-amber-400/40 bg-amber-950/90 px-3 py-2 text-center text-xs text-amber-100"
-          role="alert"
-          aria-live="polite"
-        >
-          {gpsError}
-        </div>
-      ) : gpsStatus !== 'idle' && gpsStatus !== 'active' ? (
-        <div
-          className="pointer-events-none absolute inset-x-3 bottom-3 z-20 mx-auto max-w-xl rounded-lg border border-slate-400/40 bg-slate-950/90 px-3 py-2 text-center text-xs text-slate-100"
-          role="status"
-          aria-live="polite"
-        >
-          {gpsStatus === 'requesting'
-            ? 'Requesting phone location permission…'
-            : gpsStatus === 'waiting'
-              ? 'Location permission granted; waiting for a GPS fix…'
-              : gpsStatus === 'sending'
-                ? 'GPS captured; sending update to CMS and Admin…'
-                : 'GPS captured; Admin forwarding is pending.'}
-        </div>
-      ) : null}
 
       {/* Compact Log out — top-right, visible ~1 min after load/unlock */}
       {opsOpen ? (
