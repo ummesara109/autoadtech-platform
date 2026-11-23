@@ -431,15 +431,6 @@ export class AuthService {
         screen.id,
         vehicle.autoNumber,
       );
-    } else if (
-      temporaryDemo &&
-      normalizeAutoNumber(vehicle.autoNumber) !== TEMP_DEMO_AUTONUMBER
-    ) {
-      await this.assertRegisteredDisplayDevice(
-        vehicle.id,
-        screen.id,
-        vehicle.autoNumber,
-      );
     }
 
     if (temporaryDemo) {
@@ -919,13 +910,6 @@ export class AuthService {
       operator.id,
       vehicle.id,
     );
-    if (normalizeAutoNumber(vehicle.autoNumber) !== TEMP_DEMO_AUTONUMBER) {
-      await this.assertRegisteredDisplayDevice(
-        vehicle.id,
-        screen.id,
-        vehicle.autoNumber,
-      );
-    }
     if (screen.id !== claims.screenId) {
       throw new UnauthorizedException('Demo screen assignment has changed');
     }

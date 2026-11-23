@@ -107,10 +107,12 @@ CMS session and GPS flow. Disable demo mode after testing with
 `CMS_DEMO_AUTH=false` and redeploy. The Supabase service-role/secret key must
 remain server-side.
 
-The temporary `KA01AB0000` Production CMS PWA session does not validate the
-Admin display-device mapping or lifecycle status. It still requires the active
-CMS vehicle, operator, and assigned active screen. The four additional demo OTP
-flows and normal Production SMS sessions continue to require an active
+Temporary Production demo PWA sessions for all five designated vehicles do not
+validate the Admin display-device mapping or lifecycle status. They still
+require an active CMS vehicle, operator, and assigned active screen. This only
+bypasses the Admin-device check during demo authentication; it does not
+reactivate a device or guarantee that a physical display or Admin GPS mapping is
+available. Normal Production SMS sessions continue to require an active
 Admin-device mapping.
 
 Production demo playback is separate from demo authentication. After successful

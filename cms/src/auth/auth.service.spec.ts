@@ -354,27 +354,43 @@ describe('AuthService demo OTP vehicle flow', () => {
     );
   });
 
-  it.each(['revoked', 'inactive'])(
-    'allows KA01AB0000 CMS PWA sessions when the Admin display device is %s',
-    async (lifecycleStatus) => {
+  it.each([
+    ['KA01AB0000', '123456'],
+    ['KA01AB0001', '481205'],
+    ['KA01AB0002', '528314'],
+    ['KA01AB0003', '639425'],
+    ['KA01AB0004', '740536'],
+  ].flatMap(([autoNumber, otp]) =>
+    ['revoked', 'inactive'].map((lifecycleStatus) => [
+      autoNumber,
+      otp,
+      lifecycleStatus,
+    ]),
+  ))(
+    'allows demo PWA sessions for %s when the Admin display device is %s',
+    async (autoNumber, otp, lifecycleStatus) => {
       const tables = registeredVehicleRows();
-      tables.cms_vehicles[0].auto_number = 'KA01AB0000';
+      tables.cms_vehicles[0].auto_number = autoNumber;
       tables.admin_dm_devices[0].lifecycle_status = lifecycleStatus;
       const { auth } = createAuthHarness(
         {
           CMS_DEMO_AUTH: 'true',
+          CMS_DEMO_OTP_KA01AB0001: '481205',
+          CMS_DEMO_OTP_KA01AB0002: '528314',
+          CMS_DEMO_OTP_KA01AB0003: '639425',
+          CMS_DEMO_OTP_KA01AB0004: '740536',
           NODE_ENV: 'production',
           VERCEL_ENV: 'production',
           SUPABASE_SERVICE_ROLE_KEY: 'test-server-key',
         },
         tables,
       );
-      const lookup = await auth.lookupAutoNumber('KA01AB0000');
-      const session = await auth.verifyOtp(lookup.challengeId, '123456');
+      const lookup = await auth.lookupAutoNumber(autoNumber);
+      const session = await auth.verifyOtp(lookup.challengeId, otp);
 
-      expect(session.operator.autoNumber).toBe('KA01AB0000');
+      expect(session.operator.autoNumber).toBe(autoNumber);
       const resolved = await auth.resolveSession(session.accessToken);
-      expect(resolved.operator.autoNumber).toBe('KA01AB0000');
+      expect(resolved.operator.autoNumber).toBe(autoNumber);
     },
   );
 
