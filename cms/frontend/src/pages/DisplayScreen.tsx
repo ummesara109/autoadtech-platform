@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type SyntheticEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type SyntheticEvent } from 'react';
+import { Capacitor } from '@capacitor/core';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ApiError, api, type DashboardResponse } from '../lib/api';
 import {
@@ -173,6 +174,10 @@ export function DisplayScreen() {
       ? window.matchMedia('(orientation: portrait)').matches
       : false,
   );
+  const [locationReady, setLocationReady] = useState(false);
+  const [locationDenied, setLocationDenied] = useState(false);
+  const [locationRequesting, setLocationRequesting] = useState(false);
+  const [locationAttempt, setLocationAttempt] = useState(0);
 
   const rotateStage = viewportPortrait && searchParams.get('noRotate') !== '1';
 
@@ -221,6 +226,46 @@ export function DisplayScreen() {
     if (opsOpen) scheduleOpsHide();
   }
 
+  const requestLocationAccess = useCallback(async () => {
+    if (!hasSessionCredential(session)) return;
+    setLocationRequesting(true);
+    setLocationDenied(false);
+    if (Capacitor.isNativePlatform()) {
+      setLocationReady(true);
+      void startSilentGps(session.accessToken);
+      setLocationRequesting(false);
+      return;
+    }
+    if (typeof navigator === 'undefined' || !('geolocation' in navigator)) {
+      setLocationDenied(true);
+      setLocationRequesting(false);
+      return;
+    }
+    try {
+      await new Promise<void>((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(
+          () => resolve(),
+          (error) => reject(error),
+          { enableHighAccuracy: true, maximumAge: 0, timeout: 20_000 },
+        );
+      });
+      setLocationReady(true);
+      void startSilentGps(session.accessToken);
+    } catch (error) {
+      if (
+        error instanceof GeolocationPositionError &&
+        error.code === error.PERMISSION_DENIED
+      ) {
+        setLocationDenied(true);
+      } else {
+        setLocationReady(true);
+        void startSilentGps(session.accessToken);
+      }
+    } finally {
+      setLocationRequesting(false);
+    }
+  }, [session]);
+
   async function doLogout() {
     const token = session?.accessToken;
     // Stop silent GPS before clearing session (token still needed for /location/stop).
@@ -243,8 +288,13 @@ export function DisplayScreen() {
       navigate('/', { replace: true });
       return;
     }
-    // Resume silent GPS if page reloaded while session alive (no GPS UI).
-    void startSilentGps(session.accessToken);
+    void requestLocationAccess();
+  }, [locationAttempt, navigate, requestLocationAccess, session]);
+
+  useEffect(() => {
+    if (!hasSessionCredential(session) || !locationReady) {
+      return;
+    }
 
     let cancelled = false;
     let timer: number | undefined;
@@ -291,7 +341,7 @@ export function DisplayScreen() {
       cancelled = true;
       if (timer) window.clearTimeout(timer);
     };
-  }, [online]);
+  }, [locationReady, online]);
 
   // Soft-lock: discourage accidental leave. Cannot block Android system nav / Home.
   useEffect(() => {
@@ -873,6 +923,38 @@ export function DisplayScreen() {
     (slotSrc[0] || slotSrc[1]),
   );
   const showImageFrame = Boolean(canShowCreative && imageSrc);
+
+  if (hasSessionCredential(session) && !locationReady) {
+    return (
+      <div className="flex h-dvh w-dvw items-center justify-center bg-black px-6 text-center text-[var(--cms-ink)]">
+        <div className="max-w-md space-y-4">
+          {locationDenied ? (
+            <>
+              <p className="text-lg font-medium">
+                Location access is required to open the Display Screen.
+              </p>
+              <p className="text-sm text-[var(--cms-muted)]">
+                Please allow location access and try again.
+              </p>
+              <button
+                type="button"
+                className="inline-flex min-h-11 items-center justify-center rounded-xl border border-[var(--cms-border)] px-4 py-3 font-semibold"
+                onClick={() => setLocationAttempt((value) => value + 1)}
+              >
+                Retry
+              </button>
+            </>
+          ) : (
+            <p className="text-sm text-[var(--cms-muted)]">
+              {locationRequesting
+                ? 'Requesting location access…'
+                : 'Checking location access…'}
+            </p>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
