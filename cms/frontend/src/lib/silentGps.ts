@@ -94,13 +94,19 @@ let lastPostedLng: number | null = null;
 let gpsError: string | null = null;
 let gpsStatus: SilentGpsStatus = 'idle';
 
+export type SilentGpsState = {
+  status: SilentGpsStatus;
+  error: string | null;
+  lastPostedAt: number | null;
+};
+
 function setGpsStatus(status: SilentGpsStatus, message: string | null = null) {
   gpsStatus = status;
   gpsError = message;
   if (typeof window !== 'undefined') {
     window.dispatchEvent(
       new CustomEvent('niyoads:gps-status', {
-        detail: { status, error: message },
+        detail: { status, error: message, lastPostedAt: lastPostAt || null },
       }),
     );
   }
@@ -169,6 +175,9 @@ async function postFix(pos: GeolocationPosition, token?: string) {
       recordedAt: new Date().toISOString(),
       deviceId: deviceId(),
     });
+    lastPostAt = Date.now();
+    lastPostedLat = lat;
+    lastPostedLng = lng;
     if (result.adminForwarded === false) {
       setGpsStatus(
         'pending',
@@ -177,9 +186,6 @@ async function postFix(pos: GeolocationPosition, token?: string) {
     } else {
       setGpsStatus('active');
     }
-    lastPostAt = Date.now();
-    lastPostedLat = lat;
-    lastPostedLng = lng;
   } catch (err) {
     pending = pos;
     const detail =
@@ -366,6 +372,14 @@ export function getSilentGpsError() {
 
 export function getSilentGpsStatus() {
   return gpsStatus;
+}
+
+export function getSilentGpsState(): SilentGpsState {
+  return {
+    status: gpsStatus,
+    error: gpsError,
+    lastPostedAt: lastPostAt || null,
+  };
 }
 
 export function isSilentGpsRunning() {

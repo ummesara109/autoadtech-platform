@@ -8,8 +8,10 @@ import {
   loadSession,
 } from '../lib/session';
 import {
+  getSilentGpsState,
   startSilentGps,
   stopSilentGps,
+  type SilentGpsState,
 } from '../lib/silentGps';
 import {
   advanceOfflineSnapshot,
@@ -178,6 +180,9 @@ export function DisplayScreen() {
   const [locationDenied, setLocationDenied] = useState(false);
   const [locationRequesting, setLocationRequesting] = useState(false);
   const [locationAttempt, setLocationAttempt] = useState(0);
+  const [gpsState, setGpsState] = useState<SilentGpsState>(() =>
+    getSilentGpsState(),
+  );
   const sessionToken = session?.accessToken ?? null;
 
   const rotateStage = viewportPortrait && searchParams.get('noRotate') !== '1';
@@ -291,6 +296,19 @@ export function DisplayScreen() {
     }
     void requestLocationAccess();
   }, [locationAttempt, navigate, requestLocationAccess, sessionToken]);
+
+  useEffect(() => {
+    if (!sessionToken) return;
+    const onGps = (event: Event) => {
+      const detail = (event as CustomEvent<SilentGpsState>).detail;
+      if (detail) setGpsState(detail);
+      else setGpsState(getSilentGpsState());
+    };
+    window.addEventListener('niyoads:gps-status', onGps as EventListener);
+    setGpsState(getSilentGpsState());
+    return () =>
+      window.removeEventListener('niyoads:gps-status', onGps as EventListener);
+  }, [sessionToken]);
 
   useEffect(() => {
     if (!hasSessionCredential(session) || !locationReady) {
@@ -925,6 +943,25 @@ export function DisplayScreen() {
   );
   const showImageFrame = Boolean(canShowCreative && imageSrc);
 
+  const gpsLiveLabel = (() => {
+    if (gpsState.status === 'active' || gpsState.status === 'pending') {
+      if (gpsState.lastPostedAt) {
+        const ageSec = Math.max(
+          0,
+          Math.round((Date.now() - gpsState.lastPostedAt) / 1000),
+        );
+        return `Live tracking • ${ageSec}s ago`;
+      }
+      return 'Live tracking • active';
+    }
+    if (gpsState.status === 'sending' || gpsState.status === 'requesting') {
+      return 'Live tracking • updating…';
+    }
+    if (gpsState.status === 'waiting') return 'Live tracking • waiting for GPS';
+    if (gpsState.status === 'error') return 'Live tracking • issue';
+    return null;
+  })();
+
   if (hasSessionCredential(session) && !locationReady) {
     return (
       <div className="flex h-dvh w-dvw items-center justify-center bg-black px-6 text-center text-[var(--cms-ink)]">
@@ -1089,10 +1126,15 @@ export function DisplayScreen() {
       {/* Compact Log out — top-right, visible ~1 min after load/unlock */}
       {opsOpen ? (
         <div
-          className="pointer-events-none absolute inset-x-0 top-0 z-20 flex justify-end safe-top px-2 py-1.5"
+          className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start justify-end gap-2 safe-top px-2 py-1.5"
           onClick={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}
         >
+          {gpsLiveLabel ? (
+            <div className="pointer-events-none rounded border border-[var(--cms-border)] bg-black/75 px-2 py-0.5 text-[10px] font-medium leading-tight tracking-wide text-[var(--cms-muted)] backdrop-blur-md">
+              {gpsLiveLabel}
+            </div>
+          ) : null}
           <button
             type="button"
             className="display-ops-logout pointer-events-auto rounded border border-[var(--cms-border)] bg-black/75 px-2 py-0.5 text-[10px] font-semibold leading-tight tracking-wide backdrop-blur-md"
