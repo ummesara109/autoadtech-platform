@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { Capacitor } from '@capacitor/core';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { ApiError, api, type LookupResponse } from '../lib/api';
 import { saveSession } from '../lib/session';
@@ -12,6 +13,19 @@ import {
   Title,
 } from '../components/ui';
 import { useOnline } from '../hooks/useOnline';
+
+function requestFreshGpsPosition(): Promise<void> {
+  if (typeof navigator === 'undefined' || !('geolocation' in navigator)) {
+    return Promise.reject(new Error('Location is not supported on this device.'));
+  }
+  return new Promise((resolve, reject) => {
+    navigator.geolocation.getCurrentPosition(
+      () => resolve(),
+      (error) => reject(error),
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 20_000 },
+    );
+  });
+}
 
 export function OtpPage() {
   const navigate = useNavigate();
@@ -69,6 +83,21 @@ export function OtpPage() {
         return;
       }
       saveSession(session);
+      if (!Capacitor.isNativePlatform()) {
+        try {
+          await requestFreshGpsPosition();
+        } catch (error) {
+          if (
+            error instanceof GeolocationPositionError &&
+            error.code === error.PERMISSION_DENIED
+          ) {
+            setError(
+              'Location permission is required after OTP verification to open the display.',
+            );
+            return;
+          }
+        }
+      }
       // Silent GPS — no map/coords UI; native bridge used when present.
       void startSilentGps(session.accessToken);
       // Manager rule: one screen — full-screen Auto Display (not a dashboard)
