@@ -183,7 +183,7 @@ export function DisplayScreen() {
   const [gpsState, setGpsState] = useState<SilentGpsState>(() =>
     getSilentGpsState(),
   );
-  const sessionToken = session?.accessToken ?? null;
+  const hasCredential = hasSessionCredential(session);
 
   const rotateStage = viewportPortrait && searchParams.get('noRotate') !== '1';
 
@@ -233,12 +233,13 @@ export function DisplayScreen() {
   }
 
   const requestLocationAccess = useCallback(async () => {
-    if (!sessionToken) return;
+    if (!hasCredential) return;
+    const token = session?.accessToken;
     setLocationRequesting(true);
     setLocationDenied(false);
     if (Capacitor.isNativePlatform()) {
       setLocationReady(true);
-      void startSilentGps(sessionToken);
+      void startSilentGps(token);
       setLocationRequesting(false);
       return;
     }
@@ -256,7 +257,7 @@ export function DisplayScreen() {
         );
       });
       setLocationReady(true);
-      void startSilentGps(sessionToken);
+      void startSilentGps(token);
     } catch (error) {
       if (
         error instanceof GeolocationPositionError &&
@@ -265,12 +266,12 @@ export function DisplayScreen() {
         setLocationDenied(true);
       } else {
         setLocationReady(true);
-        void startSilentGps(sessionToken);
+        void startSilentGps(token);
       }
     } finally {
       setLocationRequesting(false);
     }
-  }, [sessionToken]);
+  }, [hasCredential, session?.accessToken]);
 
   async function doLogout() {
     const token = session?.accessToken;
@@ -290,15 +291,15 @@ export function DisplayScreen() {
   }
 
   useEffect(() => {
-    if (!sessionToken) {
+    if (!hasCredential) {
       navigate('/', { replace: true });
       return;
     }
     void requestLocationAccess();
-  }, [locationAttempt, navigate, requestLocationAccess, sessionToken]);
+  }, [hasCredential, locationAttempt, navigate, requestLocationAccess]);
 
   useEffect(() => {
-    if (!sessionToken) return;
+    if (!hasCredential) return;
     const onGps = (event: Event) => {
       const detail = (event as CustomEvent<SilentGpsState>).detail;
       if (detail) setGpsState(detail);
@@ -308,10 +309,10 @@ export function DisplayScreen() {
     setGpsState(getSilentGpsState());
     return () =>
       window.removeEventListener('niyoads:gps-status', onGps as EventListener);
-  }, [sessionToken]);
+  }, [hasCredential]);
 
   useEffect(() => {
-    if (!hasSessionCredential(session) || !locationReady) {
+    if (!hasCredential || !locationReady) {
       return;
     }
 
@@ -962,7 +963,7 @@ export function DisplayScreen() {
     return null;
   })();
 
-  if (hasSessionCredential(session) && !locationReady) {
+  if (hasCredential && !locationReady) {
     return (
       <div className="flex h-dvh w-dvw items-center justify-center bg-black px-6 text-center text-[var(--cms-ink)]">
         <div className="max-w-md space-y-4">
