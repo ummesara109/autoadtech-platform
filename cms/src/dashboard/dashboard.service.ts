@@ -50,11 +50,13 @@ export class DashboardService {
       throw new ForbiddenException('Screen does not belong to session vehicle');
     }
 
-    // Local / CMS_DEV_AUTH: refill empty in-memory queue so login never idles blank.
-    // No-op when PLAYING or QUEUED already exist (never interrupts PLAYING).
-    const seeded = this.auth.devAuthEnabled
-      ? await this.queue.ensureDevDemoAdsIfEmpty(screen.id)
-      : false;
+    // Local / CMS_DEV_AUTH and designated demo vehicles: refill empty queue so
+    // demo screens keep playing demo ads. No-op when PLAYING or QUEUED exist.
+    const seeded =
+      this.auth.devAuthEnabled ||
+      this.auth.isDesignatedDemoPlaybackVehicle(vehicle.autoNumber)
+        ? await this.queue.ensureDevDemoAdsIfEmpty(screen.id)
+        : false;
 
     // Screen-scoped key so QueueService can invalidate after assign/complete
     const cacheKey = `cms:dash:screen:${screen.id}`;

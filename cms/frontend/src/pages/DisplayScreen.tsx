@@ -178,6 +178,7 @@ export function DisplayScreen() {
   const [locationDenied, setLocationDenied] = useState(false);
   const [locationRequesting, setLocationRequesting] = useState(false);
   const [locationAttempt, setLocationAttempt] = useState(0);
+  const sessionToken = session?.accessToken ?? null;
 
   const rotateStage = viewportPortrait && searchParams.get('noRotate') !== '1';
 
@@ -227,12 +228,12 @@ export function DisplayScreen() {
   }
 
   const requestLocationAccess = useCallback(async () => {
-    if (!hasSessionCredential(session)) return;
+    if (!sessionToken) return;
     setLocationRequesting(true);
     setLocationDenied(false);
     if (Capacitor.isNativePlatform()) {
       setLocationReady(true);
-      void startSilentGps(session.accessToken);
+      void startSilentGps(sessionToken);
       setLocationRequesting(false);
       return;
     }
@@ -250,7 +251,7 @@ export function DisplayScreen() {
         );
       });
       setLocationReady(true);
-      void startSilentGps(session.accessToken);
+      void startSilentGps(sessionToken);
     } catch (error) {
       if (
         error instanceof GeolocationPositionError &&
@@ -259,12 +260,12 @@ export function DisplayScreen() {
         setLocationDenied(true);
       } else {
         setLocationReady(true);
-        void startSilentGps(session.accessToken);
+        void startSilentGps(sessionToken);
       }
     } finally {
       setLocationRequesting(false);
     }
-  }, [session]);
+  }, [sessionToken]);
 
   async function doLogout() {
     const token = session?.accessToken;
@@ -284,12 +285,12 @@ export function DisplayScreen() {
   }
 
   useEffect(() => {
-    if (!hasSessionCredential(session)) {
+    if (!sessionToken) {
       navigate('/', { replace: true });
       return;
     }
     void requestLocationAccess();
-  }, [locationAttempt, navigate, requestLocationAccess, session]);
+  }, [locationAttempt, navigate, requestLocationAccess, sessionToken]);
 
   useEffect(() => {
     if (!hasSessionCredential(session) || !locationReady) {

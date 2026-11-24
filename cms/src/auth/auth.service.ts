@@ -199,7 +199,7 @@ export class AuthService {
     return timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
   }
 
-  private isDesignatedDemoPlaybackVehicle(autoNumber: string) {
+  isDesignatedDemoPlaybackVehicle(autoNumber: string) {
     return DEMO_PLAYBACK_AUTONUMBERS.includes(normalizeAutoNumber(autoNumber));
   }
 
