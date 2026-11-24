@@ -31,3 +31,5 @@ api/.env
 **/.env.*
 !.env.example
 !**/.env.example
+
+.vercel
