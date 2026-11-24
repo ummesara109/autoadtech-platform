@@ -26,8 +26,8 @@ export default defineConfig({
           'Auto AdTech full-screen vehicle display — Auto Number login, OTP, then /display signage',
         theme_color: '#050e0a',
         background_color: '#050e0a',
-        display: 'fullscreen',
-        display_override: ['fullscreen', 'standalone', 'minimal-ui'],
+        display: 'standalone',
+        orientation: 'portrait',
         // App root: login → OTP → /display (session resumes at /display after install)
         start_url: '/',
         scope: '/',

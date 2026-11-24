@@ -9,11 +9,9 @@ export function Shell({
 }) {
   return (
     <div
-      className={`mx-auto flex min-h-dvh w-full flex-col py-6 ${
+      className={`mx-auto flex min-h-dvh w-full flex-col pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-[max(1.5rem,env(safe-area-inset-top))] ${
         narrow ? 'px-7 sm:px-6 lg:px-8' : 'px-4 sm:px-6 lg:px-8'
-      } ${
-        narrow ? 'max-w-md justify-center' : 'max-w-5xl'
-      }`}
+      } ${narrow ? 'max-w-md' : 'max-w-5xl'}`}
     >
       {children}
     </div>
